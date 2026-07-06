@@ -7,7 +7,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
 
 
-<title>page-1 – project-template</title>
+<title>Data import – project-template</title>
 <style>
 code{white-space: pre-wrap;}
 span.smallcaps{font-variant: small-caps;}
@@ -101,35 +101,6 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
   }
 }</script>
 
-  <script src="https://cdnjs.cloudflare.com/polyfill/v3/polyfill.min.js?features=es6"></script>
-  <script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml-full.js" type="text/javascript"></script>
-
-<script type="text/javascript">
-const typesetMath = (el) => {
-  if (window.MathJax) {
-    // MathJax Typeset
-    window.MathJax.typeset([el]);
-  } else if (window.katex) {
-    // KaTeX Render
-    var mathElements = el.getElementsByClassName("math");
-    var macros = [];
-    for (var i = 0; i < mathElements.length; i++) {
-      var texText = mathElements[i].firstChild;
-      if (mathElements[i].tagName == "SPAN") {
-        window.katex.render(texText.data, mathElements[i], {
-          displayMode: mathElements[i].classList.contains('display'),
-          throwOnError: false,
-          macros: macros,
-          fleqn: false
-        });
-      }
-    }
-  }
-}
-window.Quarto = {
-  typesetMath
-};
-</script>
 
 <link rel="stylesheet" href="styles.css">
 </head>
@@ -156,12 +127,12 @@ window.Quarto = {
 <span class="menu-text">Home</span></a>
   </li>  
   <li class="nav-item">
-    <a class="nav-link active" href="./page-1.html" aria-current="page"> 
-<span class="menu-text">Page 1</span></a>
+    <a class="nav-link active" href="./data-import.html" aria-current="page"> 
+<span class="menu-text">Data import</span></a>
   </li>  
   <li class="nav-item">
-    <a class="nav-link" href="./page-2.html"> 
-<span class="menu-text">Page 2</span></a>
+    <a class="nav-link" href="./quick-ex.html"> 
+<span class="menu-text">Quick example</span></a>
   </li>  
 </ul>
             <ul class="navbar-nav navbar-nav-scroll ms-auto">
@@ -187,7 +158,7 @@ window.Quarto = {
 
 <header id="title-block-header" class="quarto-title-block default">
 <div class="quarto-title">
-<h1 class="title">page-1</h1>
+<h1 class="title">Data import</h1>
 </div>
 
 
@@ -204,22 +175,95 @@ window.Quarto = {
 </header>
 
 
-<p>Here is a page for organizing tutorials or specific analyses in the project. This can also contain protocols or other relevant information for project management. Whatever you would like.</p>
+<section id="introduction" class="level2">
+<h2 class="anchored" data-anchor-id="introduction">Introduction</h2>
+<p>This script outlines the process to download macroinvertebrate data from a working database of files released by NEON. The full process for updating this database can be found in the <a href="https://size-spectra-boogie.github.io/NEONSizeData/initiate-db.html"><code>NEONSizeData</code> repository</a>. This process uses the <code>neonstore</code> package to manage data file download and storage for specific NEON data releases that form the underlying derived data products for size analysis. The database of up-to-date files is stored locally on a single computer and the updating of data files is automated. For downstream analysis, the s3 database will serve as the working data source.</p>
+<p>We set the specifications of the s3 bucket. This bucket is publicly readable:</p>
 <div class="cell">
-<div class="sourceCode cell-code" id="cb1"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a>x <span class="ot">=</span> <span class="fu">rnorm</span>(<span class="dv">100</span>, <span class="dv">0</span>, <span class="dv">1</span>)</span>
-<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a><span class="fu">hist</span>(x)</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
-<div class="cell-output-display">
-<div>
-<figure class="figure">
-<p><img src="page-1_files/figure-html/unnamed-chunk-1-1.png" class="img-fluid figure-img" width="672"></p>
-</figure>
+<div class="sourceCode cell-code" id="cb1"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="co"># set the s3 bucket specs  </span></span>
+<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a>bucket <span class="ot">=</span> <span class="st">"neonsizedata-392202703749-us-east-2-an"</span></span>
+<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a>prefix <span class="ot">=</span> <span class="st">"neonstore/parquet"</span></span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+</div>
+<p>We can view the files available on the s3 bucket using the <code>aws.s3</code> package to view the contents.</p>
+<div class="cell">
+<div class="sourceCode cell-code" id="cb2"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="fu">get_bucket</span>(<span class="at">bucket =</span> bucket,</span>
+<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a>           <span class="at">prefix =</span> prefix,</span>
+<span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a>           <span class="at">max =</span> <span class="dv">3</span>)</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+</div>
+<p>And we can connect to the s3 bucket to perform actions locally by connecting to the remote bucket:</p>
+<div class="cell">
+<div class="sourceCode cell-code" id="cb3"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a>s3 <span class="ot">=</span> arrow<span class="sc">::</span><span class="fu">s3_bucket</span>(<span class="at">bucket =</span> <span class="fu">paste0</span>(bucket,<span class="st">"/"</span>,prefix,<span class="st">"/"</span>))</span>
+<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a>remote <span class="ot">=</span> <span class="fu">neon_remote_db</span>(<span class="at">bucket =</span> s3)</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+</div>
+<p>and then reading in a file from the remote connection.</p>
+<div class="cell">
+<div class="sourceCode cell-code" id="cb4"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="fu">neon_remote</span>(</span>
+<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a>  <span class="at">table =</span> <span class="st">"inv_taxonomyProcessed-basic"</span>,</span>
+<span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a>  <span class="at">product =</span> <span class="st">"DP1.20120.001"</span>,</span>
+<span id="cb4-4"><a href="#cb4-4" aria-hidden="true" tabindex="-1"></a>  <span class="at">db =</span> remote</span>
+<span id="cb4-5"><a href="#cb4-5" aria-hidden="true" tabindex="-1"></a>  )  <span class="sc">%&gt;%</span></span>
+<span id="cb4-6"><a href="#cb4-6" aria-hidden="true" tabindex="-1"></a>  dplyr<span class="sc">::</span><span class="fu">collect</span>() <span class="sc">%&gt;%</span> </span>
+<span id="cb4-7"><a href="#cb4-7" aria-hidden="true" tabindex="-1"></a>  dplyr<span class="sc">::</span><span class="fu">glimpse</span>()</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>Rows: 354,176
+Columns: 52
+$ uid                      &lt;chr&gt; "7f6e67d4-88e4-4b24-9f4e-85181f1a5dad", "a990…
+$ domainID                 &lt;chr&gt; "D14", "D14", "D14", "D14", "D14", "D14", "D1…
+$ siteID                   &lt;chr&gt; "SYCA", "SYCA", "SYCA", "SYCA", "SYCA", "SYCA…
+$ namedLocation            &lt;chr&gt; "SYCA.AOS.reach", "SYCA.AOS.reach", "SYCA.AOS…
+$ collectDate              &lt;dttm&gt; 2026-01-21 11:25:00, 2026-01-21 11:25:00, 20…
+$ identifiedDate           &lt;date&gt; 2026-02-19, 2026-02-19, 2026-02-20, 2026-02-…
+$ sampleID                 &lt;chr&gt; "SYCA.20260121.SURBER.3", "SYCA.20260121.SURB…
+$ sampleCode               &lt;chr&gt; "A00000495253", "A00000495255", "A00000495254…
+$ acceptedTaxonID          &lt;chr&gt; "GASSP1", "SIMSP1", "THISP2", "PHYSP20", "SIM…
+$ targetTaxaPresent        &lt;chr&gt; "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", …
+$ scientificName           &lt;chr&gt; "Gastropoda sp.", "Simulium sp.", "Thienemann…
+$ morphospeciesID          &lt;chr&gt; NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, N…
+$ taxonRank                &lt;chr&gt; "class", "genus", "genus", "genus", "genus", …
+$ phylum                   &lt;chr&gt; "Mollusca", "Arthropoda", "Arthropoda", "Moll…
+$ subphylum                &lt;chr&gt; NA, "Hexapoda", "Hexapoda", NA, "Hexapoda", "…
+$ class                    &lt;chr&gt; "Gastropoda", "Insecta", "Insecta", "Gastropo…
+$ subclass                 &lt;chr&gt; NA, "Pterygota", "Pterygota", NA, "Pterygota"…
+$ infraclass               &lt;chr&gt; NA, "Neoptera", "Neoptera", NA, "Neoptera", "…
+$ superorder               &lt;chr&gt; NA, "Holometabola", "Holometabola", NA, "Holo…
+$ order                    &lt;chr&gt; NA, "Diptera", "Diptera", "Basommatophora", "…
+$ suborder                 &lt;chr&gt; NA, "Nematocera", "Nematocera", NA, "Nematoce…
+$ infraorder               &lt;chr&gt; NA, "Culicomorpha", "Culicomorpha", NA, "Culi…
+$ superfamily              &lt;chr&gt; NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, N…
+$ family                   &lt;chr&gt; NA, "Simuliidae", "Chironomidae", "Physidae",…
+$ subfamily                &lt;chr&gt; NA, "Simuliinae", "Orthocladiinae", NA, "Simu…
+$ tribe                    &lt;chr&gt; NA, "Simuliini", NA, NA, "Simuliini", NA, "Pe…
+$ subtribe                 &lt;chr&gt; NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, N…
+$ genus                    &lt;chr&gt; NA, "Simulium", "Thienemanniella", "Physella"…
+$ specificEpithet          &lt;chr&gt; "sp.", "sp.", "sp.", "sp.", "sp.", "sp.", "sp…
+$ infraspecificEpithet     &lt;chr&gt; NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, N…
+$ invertebrateLifeStage    &lt;chr&gt; "larva", "larva", "larva", "larva", "larva", …
+$ sizeClass                &lt;dbl&gt; 1, 5, 1, 2, 5, 2, 2, 1, 4, 2, 3, 1, 7, 2, 2, …
+$ sizeCategory             &lt;chr&gt; NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, N…
+$ individualCount          &lt;dbl&gt; 6, 10, 29, 2, 1, 14, 1, 1, 6, 1, 1, 1, 1, 1, …
+$ subsamplePercent         &lt;dbl&gt; 100, 20, 100, 100, 100, 100, 100, 100, 100, 1…
+$ estimatedTotalCount      &lt;dbl&gt; 6, 50, 29, 2, 1, 14, 1, 1, 6, 1, 1, 1, 5, 1, …
+$ immatureSpecimen         &lt;chr&gt; "N", "N", "N", "N", "N", "N", "N", "N", "N", …
+$ indeterminateSpecies     &lt;chr&gt; "N", "N", "N", "N", "N", "N", "N", "N", "N", …
+$ taxonRankQualifier       &lt;chr&gt; NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, N…
+$ sampleCondition          &lt;chr&gt; "damaged, affecting taxonomy", "condition OK"…
+$ distinctTaxon            &lt;chr&gt; "N", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", …
+$ taxonDatabaseID          &lt;dbl&gt; 69459, 126774, 129182, 76698, 126774, 129182,…
+$ taxonDatabaseName        &lt;chr&gt; "ITIS", "ITIS", "ITIS", "ITIS", "ITIS", "ITIS…
+$ identificationQualifier  &lt;chr&gt; NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, N…
+$ identificationReferences &lt;chr&gt; "Thorp and Covich 2001", "Merritt and Cummins…
+$ qcChecked                &lt;chr&gt; "N", "Y", "N", "N", "N", "N", "N", "N", "N", …
+$ laboratoryName           &lt;chr&gt; "EcoAnalysts Inc.", "EcoAnalysts Inc.", "EcoA…
+$ identifiedBy             &lt;chr&gt; "A. Navesky", "A. Navesky", "S. Rice-Marshall…
+$ identificationRemarks    &lt;chr&gt; NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, N…
+$ identificationHistoryID  &lt;chr&gt; NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, N…
+$ dataQF                   &lt;chr&gt; NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, N…
+$ file                     &lt;chr&gt; "NEON.D14.SYCA.DP1.20120.001.inv_taxonomyProc…</code></pre>
 </div>
 </div>
-</div>
-<p>You can add latex formatting for inline equation <span class="math inline">\(1 + 2 = 4\)</span>, or use the separate equation lines:</p>
-<p><span class="math display">\[T = \sum_{i = 1}^{S} N_{i} T_{i}\]</span></p>
 
 
+</section>
 
 </main> <!-- /main -->
 <script id="quarto-html-after-body" type="application/javascript">

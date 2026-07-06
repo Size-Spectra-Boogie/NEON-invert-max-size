@@ -7,7 +7,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
 
 
-<title>page-2 – project-template</title>
+<title>Quick example – project-template</title>
 <style>
 code{white-space: pre-wrap;}
 span.smallcaps{font-variant: small-caps;}
@@ -156,12 +156,12 @@ window.Quarto = {
 <span class="menu-text">Home</span></a>
   </li>  
   <li class="nav-item">
-    <a class="nav-link" href="./page-1.html"> 
-<span class="menu-text">Page 1</span></a>
+    <a class="nav-link" href="./data-import.html"> 
+<span class="menu-text">Data import</span></a>
   </li>  
   <li class="nav-item">
-    <a class="nav-link active" href="./page-2.html" aria-current="page"> 
-<span class="menu-text">Page 2</span></a>
+    <a class="nav-link active" href="./quick-ex.html" aria-current="page"> 
+<span class="menu-text">Quick example</span></a>
   </li>  
 </ul>
             <ul class="navbar-nav navbar-nav-scroll ms-auto">
@@ -187,7 +187,7 @@ window.Quarto = {
 
 <header id="title-block-header" class="quarto-title-block default">
 <div class="quarto-title">
-<h1 class="title">page-2</h1>
+<h1 class="title">Quick example</h1>
 </div>
 
 
@@ -204,23 +204,123 @@ window.Quarto = {
 </header>
 
 
-<p>Here is a another page for organizing tutorials or specific analyses in the project. This can also contain protocols or other relevant information for project management. Whatever you would like.</p>
-<p>You can add code blocks like normal:</p>
+<section id="introduction" class="level2">
+<h2 class="anchored" data-anchor-id="introduction">Introduction</h2>
 <div class="cell">
-<div class="sourceCode cell-code" id="cb1"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a>x <span class="ot">=</span> <span class="fu">rnorm</span>(<span class="dv">10</span>, <span class="dv">0</span>, <span class="dv">1</span>)</span>
-<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a><span class="fu">hist</span>(x)</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<div class="sourceCode cell-code" id="cb1"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a>macroDW <span class="ot">&lt;-</span> <span class="fu">readRDS</span>(<span class="at">file =</span> <span class="fu">here</span>(<span class="st">"data/macro_dw_raw.rds"</span>))</span>
+<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a><span class="co"># clean macros data.frame and aggregate abundances within sites by taxonID</span></span>
+<span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a>macroDWList <span class="ot">=</span> macroDW <span class="sc">%&gt;%</span> </span>
+<span id="cb1-5"><a href="#cb1-5" aria-hidden="true" tabindex="-1"></a>  dplyr<span class="sc">::</span><span class="fu">select</span>(siteID, collectDate, sampleID, acceptedTaxonID,sizeClass, dw, no_m2) <span class="sc">%&gt;%</span> </span>
+<span id="cb1-6"><a href="#cb1-6" aria-hidden="true" tabindex="-1"></a>  dplyr<span class="sc">::</span><span class="fu">mutate</span>(<span class="at">collectDate =</span> <span class="fu">as.Date</span>(collectDate)) <span class="sc">%&gt;%</span> </span>
+<span id="cb1-7"><a href="#cb1-7" aria-hidden="true" tabindex="-1"></a>  dplyr<span class="sc">::</span><span class="fu">mutate</span>(<span class="at">collectMonth =</span> <span class="fu">as.Date</span>(</span>
+<span id="cb1-8"><a href="#cb1-8" aria-hidden="true" tabindex="-1"></a>    <span class="fu">paste0</span>(</span>
+<span id="cb1-9"><a href="#cb1-9" aria-hidden="true" tabindex="-1"></a>      lubridate<span class="sc">::</span><span class="fu">year</span>(collectDate),</span>
+<span id="cb1-10"><a href="#cb1-10" aria-hidden="true" tabindex="-1"></a>      <span class="st">"-"</span>,</span>
+<span id="cb1-11"><a href="#cb1-11" aria-hidden="true" tabindex="-1"></a>      lubridate<span class="sc">::</span><span class="fu">month</span>(collectDate),</span>
+<span id="cb1-12"><a href="#cb1-12" aria-hidden="true" tabindex="-1"></a>      <span class="st">"-01"</span>),</span>
+<span id="cb1-13"><a href="#cb1-13" aria-hidden="true" tabindex="-1"></a>    <span class="at">format =</span> <span class="st">"%Y-%m-%d"</span>),</span>
+<span id="cb1-14"><a href="#cb1-14" aria-hidden="true" tabindex="-1"></a>    <span class="at">collectYear =</span> lubridate<span class="sc">::</span><span class="fu">year</span>(collectDate)) <span class="sc">%&gt;%</span> </span>
+<span id="cb1-15"><a href="#cb1-15" aria-hidden="true" tabindex="-1"></a>  dplyr<span class="sc">::</span><span class="fu">summarise</span>(<span class="at">no_m2 =</span> <span class="fu">sum</span>(no_m2), <span class="at">.by =</span> <span class="fu">c</span>(siteID, collectYear, acceptedTaxonID, sizeClass, dw)) <span class="sc">%&gt;%</span> </span>
+<span id="cb1-16"><a href="#cb1-16" aria-hidden="true" tabindex="-1"></a>  <span class="fu">named_group_split</span>(siteID, acceptedTaxonID)</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+</div>
+<p>How many groups have only 1 size class?</p>
+<p>2097</p>
+<section id="example-using-the-taxa-with-the-most-observations" class="level3">
+<h3 class="anchored" data-anchor-id="example-using-the-taxa-with-the-most-observations">Example using the taxa with the most observations</h3>
+<p>Here we walk through a procedure to estimate the maximum body size for each taxa using observations across years. For each taxa, we group all observations within a year to best capture the full potential sizes observed. Below is a histogram of all observed body sizes within this example.</p>
+<div class="cell">
+<div class="sourceCode cell-code" id="cb2"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="do">## Which has the most observations?</span></span>
+<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a>max_r <span class="ot">=</span> <span class="fu">map_int</span>(macroDWList, <span class="sc">~</span><span class="fu">nrow</span>(.x)) <span class="sc">%&gt;%</span> <span class="fu">max</span>();max_r</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>[1] 232</code></pre>
+</div>
+<div class="sourceCode cell-code" id="cb4"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="do">## practice workflow on a single, well-sampled taxa</span></span>
+<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a>x <span class="ot">=</span> <span class="fu">Filter</span>(<span class="cf">function</span>(x) <span class="fu">nrow</span>(x) <span class="sc">==</span> max_r, macroDWList) <span class="sc">%&gt;%</span> purrr<span class="sc">::</span><span class="fu">flatten_df</span>()</span>
+<span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb4-4"><a href="#cb4-4" aria-hidden="true" tabindex="-1"></a>x <span class="sc">%&gt;%</span> </span>
+<span id="cb4-5"><a href="#cb4-5" aria-hidden="true" tabindex="-1"></a>  <span class="fu">ggplot</span>()<span class="sc">+</span></span>
+<span id="cb4-6"><a href="#cb4-6" aria-hidden="true" tabindex="-1"></a>  <span class="fu">geom_histogram</span>(<span class="fu">aes</span>(<span class="at">x =</span> sizeClass, <span class="at">y =</span> ..density.., <span class="at">weight =</span> no_m2))</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
 <div class="cell-output-display">
 <div>
 <figure class="figure">
-<p><img src="page-2_files/figure-html/unnamed-chunk-1-1.png" class="img-fluid figure-img" width="672"></p>
+<p><img src="quick-ex_files/figure-html/well-sampled-ex-1.png" class="img-fluid figure-img" width="672"></p>
 </figure>
 </div>
 </div>
 </div>
-<p>You can add latex formatting for inline equation <span class="math inline">\(1 + 2 = 4\)</span>, or use the separate equation lines:</p>
-<p><span class="math display">\[T = \sum_{i = 1}^{S} N_{i} T_{i}\]</span></p>
+<p>We then go through a procedure to resample from the size distribution within each year. In this case, the sizes are resampled with replacement to a fixed length (e.g., 1000). We then add variability around the size bin by sampling from a uniform distribution <span class="math inline">\(\pm\)</span> 0.5mm around the length class.</p>
+<div class="cell">
+<div class="sourceCode cell-code" id="cb5"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a>x_samp <span class="ot">=</span> x <span class="sc">%&gt;%</span> </span>
+<span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a>  <span class="fu">slice_sample</span>(<span class="at">n =</span> <span class="dv">100</span>, <span class="at">by =</span> collectYear, <span class="at">weight_by =</span> no_m2, <span class="at">replace =</span> <span class="cn">TRUE</span>)</span>
+<span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb5-4"><a href="#cb5-4" aria-hidden="true" tabindex="-1"></a>x_list <span class="ot">=</span> x_samp <span class="sc">%&gt;%</span> </span>
+<span id="cb5-5"><a href="#cb5-5" aria-hidden="true" tabindex="-1"></a>  <span class="fu">named_group_split</span>(collectYear) <span class="sc">%&gt;%</span> </span>
+<span id="cb5-6"><a href="#cb5-6" aria-hidden="true" tabindex="-1"></a>  <span class="fu">map</span>(<span class="sc">~</span>.x <span class="sc">%&gt;%</span></span>
+<span id="cb5-7"><a href="#cb5-7" aria-hidden="true" tabindex="-1"></a>        <span class="fu">select</span>(sizeClass) <span class="sc">%&gt;%</span></span>
+<span id="cb5-8"><a href="#cb5-8" aria-hidden="true" tabindex="-1"></a>        <span class="fu">mutate</span>(<span class="at">sizeClass_est =</span> <span class="fu">midpoint_resample_vec</span>(sizeClass)) <span class="sc">%&gt;%</span> </span>
+<span id="cb5-9"><a href="#cb5-9" aria-hidden="true" tabindex="-1"></a>        <span class="fu">select</span>(sizeClass_est) <span class="sc">%&gt;%</span> </span>
+<span id="cb5-10"><a href="#cb5-10" aria-hidden="true" tabindex="-1"></a>        unlist)</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+</div>
+<p>From here we fit a suite of models using the size vectors of body sizes. These models are outlined in Heather et al.&nbsp;2026 <a href="https://doi.org/10.1007/s11160-026-10047-2">“Beyond the single biggest fish: robust inference of species maximum length (<span class="math inline">\(L_{max}\)</span>) from sample maxima”</a>. That estimate maximum length using Bayesian inference with three different approaches. These have been collected into an R package <code>fishmax</code>.</p>
+<div class="cell">
+<div class="sourceCode cell-code" id="cb6"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a>fishmax<span class="sc">::</span><span class="fu">fit_max_model</span>(x_list)</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+</div>
+<p>From these models we can look at the estimated maximum lengths with <code>get_max()</code></p>
+<div class="cell">
+<div class="cell-output-display">
+<table class="caption-top table table-sm table-striped small">
+<thead>
+<tr class="header">
+<th style="text-align: left;">model</th>
+<th style="text-align: right;">max_fit.50%</th>
+<th style="text-align: right;">max_lwr.10%</th>
+<th style="text-align: right;">max_upr.90%</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td style="text-align: left;">EVT (GEV)</td>
+<td style="text-align: right;">40.97927</td>
+<td style="text-align: right;">35.90196</td>
+<td style="text-align: right;">48.73112</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;">EVT (Gumbel)</td>
+<td style="text-align: right;">42.74067</td>
+<td style="text-align: right;">37.61129</td>
+<td style="text-align: right;">49.67276</td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;">EFS</td>
+<td style="text-align: right;">38.98511</td>
+<td style="text-align: right;">35.38883</td>
+<td style="text-align: right;">43.81292</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;">EFSmm</td>
+<td style="text-align: right;">52.45721</td>
+<td style="text-align: right;">51.90712</td>
+<td style="text-align: right;">53.00774</td>
+</tr>
+</tbody>
+</table>
+</div>
+</div>
+<p>and lastly plot the estimates and their uncertainty with <code>plot_max()</code></p>
+<div class="cell">
+<div class="cell-output-display">
+<div>
+<figure class="figure">
+<p><img src="quick-ex_files/figure-html/plot-max-ests-1.png" class="img-fluid figure-img" width="672"></p>
+</figure>
+</div>
+</div>
+</div>
 
 
+</section>
+</section>
 
 </main> <!-- /main -->
 <script id="quarto-html-after-body" type="application/javascript">

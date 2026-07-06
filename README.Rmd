@@ -21,11 +21,11 @@ The goal of `NEON-invert-max-size` is to build a workflow to estimate the maximu
 
 To do so, we use multiple methods:
 
-1) Extreme Value Theory (EVT)
+1)  Extreme Value Theory (EVT)
 
-2) Exact Finite Sampling (EFS)
+2)  Exact Finite Sampling (EFS)
 
-3) General mass-mortality scaling from a McKendrick-von Foerster transport model
+3)  General mass-mortality scaling from a McKendrick-von Foerster transport model
 
 These data are used to explore size-temperature scaling relationships across taxonomic groups and test predictions from macroecological theory on the drivers of body size variation (i.e. Bergmann's Rule).
 

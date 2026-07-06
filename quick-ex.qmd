@@ -7,14 +7,17 @@ format: html
 
 ```{r init, echo=FALSE, warning=FALSE, message=FALSE}
 here::i_am('quick-ex.qmd') 
-knitr::opts_chunk$set(echo = TRUE, eval = FALSE, warning = FALSE, message = FALSE) 
+knitr::opts_chunk$set(echo = TRUE, eval = FALSE, warning = FALSE, message = FALSE)
+library(here)
+library(junkR)
 library(dplyr)
 library(purrr)
 library(fishmax)
 
 ```
 
-```{r load-clean-data, warning=FALSE, message=FALSE, echo=TRUE, eval=FALSE}
+```{r load-clean-data, warning=FALSE, message=FALSE, echo=TRUE, eval=TRUE}
+
 macroDW <- readRDS(file = here("data/macro_dw_raw.rds"))
 
 # clean macros data.frame and aggregate abundances within sites by taxonID
@@ -45,7 +48,6 @@ Here we walk through a procedure to estimate the maximum body size for each taxa
 ```{r well-sampled-ex, eval = TRUE}
 ## Which has the most observations?
 max_r = map_int(macroDWList, ~nrow(.x)) %>% max();max_r
-
 
 ## practice workflow on a single, well-sampled taxa
 x = Filter(function(x) nrow(x) == max_r, macroDWList) %>% purrr::flatten_df()
