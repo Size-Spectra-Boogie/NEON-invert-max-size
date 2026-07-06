@@ -1,0 +1,59 @@
+---
+title: "Data import"
+format: html
+---
+
+## Introduction
+
+```{r init, echo=FALSE, warning=FALSE, message=FALSE}
+here::i_am('data-import.qmd') 
+knitr::opts_chunk$set(echo = TRUE, eval = FALSE, warning = FALSE, message = FALSE) 
+library(neonstore)
+library(magrittr) 
+library(arrow)
+library(aws.s3)
+```
+
+This script outlines the process to download macroinvertebrate data from a working database of files released by NEON. The full process for updating this database can be found in the [`NEONSizeData` repository](https://size-spectra-boogie.github.io/NEONSizeData/initiate-db.html). This process uses the `neonstore` package to manage data file download and storage for specific NEON data releases that form the underlying derived data products for size analysis. The database of up-to-date files is stored locally on a single computer and the updating of data files is automated. For downstream analysis, the s3 database will serve as the working data source.
+
+We set the specifications of the s3 bucket. This bucket is publicly readable:
+
+```{r set bucket specs, eval = TRUE, echo = TRUE} 
+# set the s3 bucket specs  
+bucket = "neonsizedata-392202703749-us-east-2-an"
+prefix = "neonstore/parquet"
+```
+
+We can view the files available on the s3 bucket using the `aws.s3` package to view the contents.
+
+```{r view bucket}
+
+get_bucket(bucket = bucket,
+           prefix = prefix,
+           max = 3)
+  
+
+```
+
+And we can connect to the s3 bucket to perform actions locally by connecting to the remote bucket:
+
+```{r connect remote bucket, eval = TRUE, echo =TRUE}
+
+s3 = arrow::s3_bucket(bucket = paste0(bucket,"/",prefix,"/"))
+remote = neon_remote_db(bucket = s3)
+
+```
+
+and then reading in a file from the remote connection.
+
+```{r read fish files, eval = TRUE, echo = TRUE}
+
+neon_remote(
+  table = "inv_taxonomyProcessed-basic",
+  product = "DP1.20120.001",
+  db = remote
+  )  %>%
+  dplyr::collect() %>% 
+  dplyr::glimpse()
+
+```

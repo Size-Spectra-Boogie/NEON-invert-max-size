@@ -1,0 +1,97 @@
+---
+title: "Quick example"
+format: html
+---
+
+## Introduction
+
+```{r init, echo=FALSE, warning=FALSE, message=FALSE}
+here::i_am('quick-ex.qmd') 
+knitr::opts_chunk$set(echo = TRUE, eval = FALSE, warning = FALSE, message = FALSE) 
+library(dplyr)
+library(purrr)
+library(fishmax)
+
+```
+
+```{r load-clean-data, warning=FALSE, message=FALSE, echo=TRUE, eval=FALSE}
+macroDW <- readRDS(file = here("data/macro_dw_raw.rds"))
+
+# clean macros data.frame and aggregate abundances within sites by taxonID
+macroDWList = macroDW %>% 
+  dplyr::select(siteID, collectDate, sampleID, acceptedTaxonID,sizeClass, dw, no_m2) %>% 
+  dplyr::mutate(collectDate = as.Date(collectDate)) %>% 
+  dplyr::mutate(collectMonth = as.Date(
+    paste0(
+      lubridate::year(collectDate),
+      "-",
+      lubridate::month(collectDate),
+      "-01"),
+    format = "%Y-%m-%d"),
+    collectYear = lubridate::year(collectDate)) %>% 
+  dplyr::summarise(no_m2 = sum(no_m2), .by = c(siteID, collectYear, acceptedTaxonID, sizeClass, dw)) %>% 
+  named_group_split(siteID, acceptedTaxonID)
+
+```
+
+How many groups have only 1 size class?
+
+`r macroDWList %>% keep(~nrow(.) == 1) %>% length()`
+
+### Example using the taxa with the most observations
+
+Here we walk through a procedure to estimate the maximum body size for each taxa using observations across years. For each taxa, we group all observations within a year to best capture the full potential sizes observed. Below is a histogram of all observed body sizes within this example.
+
+```{r well-sampled-ex, eval = TRUE}
+## Which has the most observations?
+max_r = map_int(macroDWList, ~nrow(.x)) %>% max();max_r
+
+
+## practice workflow on a single, well-sampled taxa
+x = Filter(function(x) nrow(x) == max_r, macroDWList) %>% purrr::flatten_df()
+
+x %>% 
+  ggplot()+
+  geom_histogram(aes(x = sizeClass, y = ..density.., weight = no_m2))
+```
+
+We then go through a procedure to resample from the size distribution within each year. In this case, the sizes are resampled with replacement to a fixed length (e.g., 1000). We then add variability around the size bin by sampling from a uniform distribution $\pm$ 0.5mm around the length class.
+
+```{r sizes-resamp, eval = FALSE}
+x_samp = x %>% 
+  slice_sample(n = 100, by = collectYear, weight_by = no_m2, replace = TRUE)
+
+x_list = x_samp %>% 
+  named_group_split(collectYear) %>% 
+  map(~.x %>%
+        select(sizeClass) %>%
+        mutate(sizeClass_est = midpoint_resample_vec(sizeClass)) %>% 
+        select(sizeClass_est) %>% 
+        unlist)
+
+```
+
+From here we fit a suite of models using the size vectors of body sizes. These models are outlined in Heather et al. 2026 ["Beyond the single biggest fish: robust inference of species maximum length ($L_{max}$) from sample maxima"](https://doi.org/10.1007/s11160-026-10047-2). That estimate maximum length using Bayesian inference with three different approaches. These have been collected into an R package `fishmax`. 
+
+```{r est-max-length, eval = FALSE}
+
+fishmax::fit_max_model(x_list)
+```
+
+```{r load-mod, eval = TRUE, echo = FALSE}
+fit = readRDS(here('data/models/CHISP8_PRLA.rds'))
+```
+
+From these models we can look at the estimated maximum lengths with `get_max()`
+
+```{r look-max-ests, eval=TRUE, echo=FALSE}
+get_max(fit) %>% knitr::kable(.)
+```
+
+and lastly plot the estimates and their uncertainty with `plot_max()`
+
+```{r plot-max-ests, eval = TRUE, echo=FALSE}
+
+plot_max(fit)
+```
+

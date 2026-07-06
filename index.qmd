@@ -1,8 +1,18 @@
 ---
-title: "Project Name"
+title: "NEON Invert Max Size"
 image: profile.jpg
 about:
   template: jolla
 ---
 
-This is the project landing page. This should be a description of the project with information on how to navigate the website, run specific code, etc. This is similar (and can be equivalent to) the project README file on the repository.
+The goal of `NEON-invert-max-size` is to build a workflow to estimate the maximum body size of macroinvertebrate taxa from stream sites in the National Ecological Observatory Network (NEON).
+
+To do so, we use multiple methods:
+
+1\) Extreme Value Theory (EVT)
+
+2\) Exact Finite Sampling (EFS)
+
+3\) General mass-mortality scaling from a McKendrick-von Foerster transport model
+
+These data are used to explore size-temperature scaling relationships across taxonomic groups and test predictions from macroecological theory on the drivers of body size variation (i.e. Bergmann's Rule).

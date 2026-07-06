@@ -11,14 +11,24 @@ knitr::opts_chunk$set(
 )
 ```
 
-# project-template
+# NEON-invert-max-size
 
 <!-- badges: start -->
 
 <!-- badges: end -->
 
-The goal of project-template is to make it easy to create a new project with a website to allow for tutorials, project logs, protocols, etc. This template can be used for new projects to standardize project structure.
+The goal of `NEON-invert-max-size` is to build a workflow to estimate the maximum body size of macroinvertebrate taxa from stream sites in the National Ecological Observatory Network (NEON).
 
-The template is build around a Quarto website to allow github pages to be source from `docs/`. The Quarto website is configured in the `_quarto.yml` file with the `output-dir: docs` command.
+To do so, we use multiple methods:
+
+1) Extreme Value Theory (EVT)
+
+2) Exact Finite Sampling (EFS)
+
+3) General mass-mortality scaling from a McKendrick-von Foerster transport model
+
+These data are used to explore size-temperature scaling relationships across taxonomic groups and test predictions from macroecological theory on the drivers of body size variation (i.e. Bergmann's Rule).
+
+The associated Quarto website is sourced from `docs/`. The Quarto website is configured in the `_quarto.yml` file with the `output-dir: docs` command.
 
 The layout of the website is also set in the `quarto.yml` document. Website structure and additional pages can be added by modifying this file.

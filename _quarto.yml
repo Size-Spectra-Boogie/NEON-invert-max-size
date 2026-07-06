@@ -8,10 +8,10 @@ website:
     left:
       - text: "Home"
         file: index.qmd
-      - text: "Page 1"
-        file: page-1.qmd
-      - text: "Page 2"
-        file: page-2.qmd
+      - text: "Data import"
+        file: data-import.qmd
+      - text: "Quick example"
+        file: quick-ex.qmd
     right:
       - icon: github
         href: https://github.com/EBGC-group/
