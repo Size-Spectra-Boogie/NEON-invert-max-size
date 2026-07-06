@@ -1,0 +1,27 @@
+project:
+  type: website
+  output-dir: docs
+
+website:
+  title: "project-template"
+  navbar:
+    left:
+      - text: "Home"
+        file: index.qmd
+      - text: "Page 1"
+        file: page-1.qmd
+      - text: "Page 2"
+        file: page-2.qmd
+    right:
+      - icon: github
+        href: https://github.com/EBGC-group/
+
+format:
+  html:
+    theme:
+      - cosmo
+      - brand
+    css: styles.css
+
+editor: visual
+

@@ -1,0 +1,18 @@
+---
+title: "page-1"
+format: html
+---
+
+Here is a page for organizing tutorials or specific analyses in the project. This can also contain protocols or other relevant information for project management. Whatever you would like.
+
+```{r}
+
+x = rnorm(100, 0, 1)
+hist(x)
+```
+
+
+You can add latex formatting for inline equation $1 + 2 = 4$, or use the separate equation lines:
+
+$$T = \sum_{i = 1}^{S} N_{i} T_{i}$$
+

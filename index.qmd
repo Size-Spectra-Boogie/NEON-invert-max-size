@@ -1,0 +1,8 @@
+---
+title: "Project Name"
+image: profile.jpg
+about:
+  template: jolla
+---
+
+This is the project landing page. This should be a description of the project with information on how to navigate the website, run specific code, etc. This is similar (and can be equivalent to) the project README file on the repository.
