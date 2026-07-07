@@ -3,7 +3,7 @@ project:
   output-dir: docs
 
 website:
-  title: "project-template"
+  title: "Neon-invert-max-size"
   navbar:
     left:
       - text: "Home"
@@ -14,7 +14,7 @@ website:
         file: quick-ex.qmd
     right:
       - icon: github
-        href: https://github.com/EBGC-group/
+        href: https://github.com/Size-Spectra-Boogie
 
 format:
   html:
