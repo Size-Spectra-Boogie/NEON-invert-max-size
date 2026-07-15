@@ -18,7 +18,7 @@ library(fishmax)
 
 ```{r load-clean-data, warning=FALSE, message=FALSE, echo=TRUE, eval=TRUE}
 
-macroDW <- readRDS(file = here("data/macro_dw_raw.rds"))
+macroDW <- readRDS(file = here("data/derived-data/macro_dw_raw.rds"))
 
 # clean macros data.frame and aggregate abundances within sites by taxonID
 macroDWList = macroDW %>% 
@@ -73,7 +73,7 @@ x_list = x_samp %>%
 
 ```
 
-From here we fit a suite of models using the size vectors of body sizes. These models are outlined in Heather et al. 2026 ["Beyond the single biggest fish: robust inference of species maximum length ($L_{max}$) from sample maxima"](https://doi.org/10.1007/s11160-026-10047-2). That estimate maximum length using Bayesian inference with three different approaches. These have been collected into an R package `fishmax`. 
+From here we fit a suite of models using the size vectors of body sizes. These models are outlined in Heather et al. 2026 ["Beyond the single biggest fish: robust inference of species maximum length ($L_{max}$) from sample maxima"](https://doi.org/10.1007/s11160-026-10047-2). That estimate maximum length using Bayesian inference with three different approaches. These have been collected into an R package `fishmax`.
 
 ```{r est-max-length, eval = FALSE}
 
@@ -96,4 +96,3 @@ and lastly plot the estimates and their uncertainty with `plot_max()`
 
 plot_max(fit)
 ```
-

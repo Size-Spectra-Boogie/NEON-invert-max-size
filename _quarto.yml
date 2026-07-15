@@ -12,6 +12,8 @@ website:
         file: data-import.qmd
       - text: "Quick example"
         file: quick-ex.qmd
+      - text: "Full Analysis"
+        file: full-analysis.qmd
     right:
       - icon: github
         href: https://github.com/Size-Spectra-Boogie

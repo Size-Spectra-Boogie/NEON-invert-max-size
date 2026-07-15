@@ -7,7 +7,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
 
 
-<title>Quick example – project-template</title>
+<title>Quick example – Neon-invert-max-size</title>
 <style>
 code{white-space: pre-wrap;}
 span.smallcaps{font-variant: small-caps;}
@@ -142,7 +142,7 @@ window.Quarto = {
       <div class="navbar-container container-fluid">
       <div class="navbar-brand-container mx-auto">
     <a class="navbar-brand" href="./index.html">
-    <span class="navbar-title">project-template</span>
+    <span class="navbar-title">Neon-invert-max-size</span>
     </a>
   </div>
             <div id="quarto-search" class="" title="Search"></div>
@@ -163,10 +163,14 @@ window.Quarto = {
     <a class="nav-link active" href="./quick-ex.html" aria-current="page"> 
 <span class="menu-text">Quick example</span></a>
   </li>  
+  <li class="nav-item">
+    <a class="nav-link" href="./full-analysis.html"> 
+<span class="menu-text">Full Analysis</span></a>
+  </li>  
 </ul>
             <ul class="navbar-nav navbar-nav-scroll ms-auto">
   <li class="nav-item compact">
-    <a class="nav-link" href="https://github.com/EBGC-group/"> <i class="bi bi-github" role="img">
+    <a class="nav-link" href="https://github.com/Size-Spectra-Boogie"> <i class="bi bi-github" role="img">
 </i> 
 <span class="menu-text"></span></a>
   </li>  
@@ -207,7 +211,7 @@ window.Quarto = {
 <section id="introduction" class="level2">
 <h2 class="anchored" data-anchor-id="introduction">Introduction</h2>
 <div class="cell">
-<div class="sourceCode cell-code" id="cb1"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a>macroDW <span class="ot">&lt;-</span> <span class="fu">readRDS</span>(<span class="at">file =</span> <span class="fu">here</span>(<span class="st">"data/macro_dw_raw.rds"</span>))</span>
+<div class="sourceCode cell-code" id="cb1"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a>macroDW <span class="ot">&lt;-</span> <span class="fu">readRDS</span>(<span class="at">file =</span> <span class="fu">here</span>(<span class="st">"data/derived-data/macro_dw_raw.rds"</span>))</span>
 <span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a><span class="co"># clean macros data.frame and aggregate abundances within sites by taxonID</span></span>
 <span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a>macroDWList <span class="ot">=</span> macroDW <span class="sc">%&gt;%</span> </span>

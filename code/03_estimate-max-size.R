@@ -1,7 +1,7 @@
 source(here::here('code/00_init.R'))
 i_am('code/03_estimate-max-size.R')
 
-macroDW <- readRDS(file = here("data/macro_dw_raw.rds"))
+macroDW <- readRDS(file = here("data/derived-data/macro_dw_raw.rds"))
 
 # clean macros data.frame and aggregate abundances within sites by taxonID
 macroDWList = macroDW %>% 
@@ -17,6 +17,8 @@ macroDWList = macroDW %>%
     collectYear = lubridate::year(collectDate)) %>% 
   dplyr::summarise(no_m2 = sum(no_m2), .by = c(siteID, collectYear, acceptedTaxonID, sizeClass, dw)) %>% 
   named_group_split(siteID, acceptedTaxonID)
+
+saveRDS(macroDWList, here('data/derived-data/macroDWList.rds'))
 
 ## How many groups only have 1 size class measured?
 
