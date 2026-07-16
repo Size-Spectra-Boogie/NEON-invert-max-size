@@ -6,7 +6,6 @@ format: html
 <link rel="stylesheet" type="text/css" href="http://cdn.datatables.net/1.10.5/css/jquery.dataTables.min.css">
 <script src="http://code.jquery.com/jquery-2.1.2.min.js"></script>
 <script src="http://cdn.datatables.net/1.10.5/js/jquery.dataTables.min.js"></script>
-
 <script type="text/javascript">
          $(document).ready(function() {
              $(".dtable").DataTable();
@@ -60,7 +59,7 @@ How many have 3+ years? `r site_taxa_nYear_tab %>% dplyr::filter(nYear >= 3) %>%
 
 ## Fitting max length models
 
-For the site-taxa combinations with 3+ years of observations we will use the `fishmax` package to estimate body size. For the other groups, we will want to devise another approach to get estimates. 
+For the site-taxa combinations with 3+ years of observations we will use the `fishmax` package to estimate body size. For the other groups, we will want to devise another approach to get estimates.
 
 ```{r subset-3+-years, echo=TRUE, eval=FALSE}
 #### This subsets samples to those with 3+ years and creates a list for 
@@ -91,7 +90,7 @@ macroDWList_nYear_3_list = macroDWList_nYear_3_samps %>%
 saveRDS(macroDWList_nYear_3_list, here('ignore/macroDWList_nYear_3_list.rds'))
 ```
 
-To run this on all ~5200 taxa-site observations takes ~10 hours. We could modify the code to estimate body sizes for each taxon in a hierarchical model that uses total information from all sites & years to estimate body sizes in sites where we only have a single years' observation using partial pooling across all samples.
+To run this on all \~5200 taxa-site observations takes \~10 hours. We could modify the code to estimate body sizes for each taxon in a hierarchical model that uses total information from all sites & years to estimate body sizes in sites where we only have a single years' observation using partial pooling across all samples.
 
 ```{r fit-models, echo=TRUE, eval = FALSE}
 # load in the large 3+ years list
@@ -303,12 +302,23 @@ x = macroTaxaList[[1]] %>%
         list() %>%
         unlist %>% midpoint_resample_vec %>% 
         as_tibble) %>% 
-  bind_rows(.id = 'id')
+  bind_rows(.id = 'id') %>% 
+  tidyr::separate_wider_delim(id, names = c('siteID','collectYear'), delim = "/", cols_remove = FALSE)
+  S = as.integer(count(unique(x$siteID)))
+  K = as.integer(count(unique(x$id)))
+  n_obs = nrow(x)
+  x = x$value
+  n_per_sample = x %>% 
+    summarise(count = n(),.by = 'id') %>% 
+    select(count) %>% 
+    unlist %>% unname
+  start_idx = c(1,(cumsum(n_per_sample)+1)) %>% head(.,-1)
+  site_id = as.integer(as.factor(x$siteID))
 
 make_stanData_taxa = function(df = NULL){
   taxaName = df$acceptedTaxonID
   
-  siteYearList = df %>% 
+  siteYearDf = df %>% 
     named_group_split(siteID, collectYear) %>% 
     map(~.x %>% 
           pmap(~rep(x = ..4, times = ..6)) %>% 
@@ -316,12 +326,34 @@ make_stanData_taxa = function(df = NULL){
           unlist %>% 
           midpoint_resample_vec %>% 
           as_tibble) %>% 
-  bind_rows(.id = 'id')
+  bind_rows(.id = 'id')%>% 
+  tidyr::separate_wider_delim(id, names = c('siteID','collectYear'), delim = "/", cols_remove = FALSE)
   
+  S = as.integer(count(unique(siteYearDf$siteID)))
+  K = as.integer(count(unique(siteYearDf$id)))
+  n_obs = nrow(siteYearDf)
+  n_per_sample = siteYearDf %>% 
+    summarise(count = n(),.by = 'id') %>% 
+    select(count) %>% 
+    unlist %>% unname
+  start_idx = c(1,(cumsum(n_per_sample)+1)) %>% head(.,-1)
+  site_id = as.integer(as.factor(siteYearDf$siteID))
+  k_ref = 20L
   
-  
-  
+  return(stan_data = list(
+    S = S,
+    K = K,
+    n_obs = n_obs,
+    x = x,
+    n_per_sample = n_per_sample,
+    start_idx = start_idx,
+    site_id = site_id,
+    k_ref = k_ref
+  ))
 }
+
+y = make_stanData_taxa(x)
+
 
 
 
