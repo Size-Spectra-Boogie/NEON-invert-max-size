@@ -205,3 +205,44 @@ simulation = function(simPars, seed = 1312){
     site_truth = site_truth
   )
 }
+
+#'
+#'
+#'
+make_stanData_taxa = function(df = NULL){
+  taxaName = df$acceptedTaxonID
+  
+  siteYearDf = df %>% 
+    named_group_split(siteID, collectYear) %>% 
+    map(~.x %>% 
+          pmap(~rep(x = ..4, times = ..6)) %>% 
+          list %>% 
+          unlist %>% 
+          midpoint_resample_vec %>% 
+          as_tibble) %>% 
+    bind_rows(.id = 'id')%>% 
+    tidyr::separate_wider_delim(id, names = c('siteID','collectYear'), delim = "/", cols_remove = FALSE)
+  
+  S = as.integer(count(unique(siteYearDf$siteID)))
+  K = as.integer(count(unique(siteYearDf$id)))
+  n_obs = nrow(siteYearDf)
+  x = unlist(siteYearDf$value)
+  n_per_sample = siteYearDf %>% 
+    summarise(count = n(),.by = 'id') %>% 
+    select(count) %>% 
+    unlist %>% unname
+  start_idx = c(1,(cumsum(n_per_sample)+1)) %>% head(.,-1)
+  site_id = as.integer(as.factor(siteYearDf$siteID))
+  k_ref = 20L
+  
+  return(stan_data = list(
+    S = S,
+    K = K,
+    n_obs = n_obs,
+    x = x,
+    n_per_sample = n_per_sample,
+    start_idx = start_idx,
+    site_id = site_id,
+    k_ref = k_ref
+  ))
+}
