@@ -13,6 +13,7 @@ library(tidyr)
 library(purrr)
 library(furrr)
 library(junkR)
+library(cmdstanr)
 library(fishmax)
 
 theme_set(theme_minimal())

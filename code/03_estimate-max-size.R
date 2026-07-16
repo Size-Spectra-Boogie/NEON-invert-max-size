@@ -121,3 +121,23 @@ x3_mod = readRDS(here('data/models/AEOSP2_ARIK.rds'))
 get_max(x3_mod)
 
 plot_max(x3_mod)
+
+# clean macros data as merge all taxa together for all sites.
+
+macroTaxaList = macroDW %>% 
+  dplyr::select(siteID, collectDate, sampleID, acceptedTaxonID,sizeClass, dw, no_m2) %>% 
+  dplyr::mutate(collectDate = as.Date(collectDate)) %>% 
+  dplyr::mutate(collectMonth = as.Date(
+    paste0(
+      lubridate::year(collectDate),
+      "-",
+      lubridate::month(collectDate),
+      "-01"),
+    format = "%Y-%m-%d"),
+    collectYear = lubridate::year(collectDate)) %>% 
+  dplyr::summarise(no_m2 = sum(no_m2), .by = c(siteID, collectYear, acceptedTaxonID, sizeClass, dw)) %>% 
+  named_group_split(acceptedTaxonID)
+
+saveRDS(macroTaxaList, here('data/derived-data/macroTaxaList.rds'))
+
+

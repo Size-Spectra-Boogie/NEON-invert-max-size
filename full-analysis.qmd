@@ -58,18 +58,22 @@ How many site-taxa combinations have only single year of observations?
 
 How many have 3+ years? `r site_taxa_nYear_tab %>% dplyr::filter(nYear >= 3) %>% nrow()`
 
-For the site-taxa combinations with 3+ years of observations we will use the `fishmax` package to estimate body size. For the other groups, we will want to devise another approach to get estimates. In the future, we could modify the code to estimate body sizes for each taxon in a hierarchical model that uses total information from all sites & years to estimate body sizes in sites where we only have a single years observation using partial pooling across all samples.
+## Fitting max length models
+
+For the site-taxa combinations with 3+ years of observations we will use the `fishmax` package to estimate body size. For the other groups, we will want to devise another approach to get estimates. 
 
 ```{r subset-3+-years, echo=TRUE, eval=FALSE}
 #### This subsets samples to those with 3+ years and creates a list for 
 #### modeling. This is a large file and is held only locally currently. 
 #### If running this analysis, this will have to be recreated
 
-# subset the taxa with 
+# find the taxa with only 3+ years
 nYear_3 = which(site_taxa_nYear_tab$nYear >= 3)
-
+# select the taxa with only 3+ years
 macroDWList_nYear_3 = macroDWList[nYear_3]
 
+# resample the sizes to reduce file size.
+# This is not ideal. We want to be able to use all the data if possible.
 set.seed(1312)
 macroDWList_nYear_3_samps = macroDWList_nYear_3 %>% 
   map(~slice_sample(.x, n = 500, by = collectYear, weight_by = no_m2, replace = TRUE))
@@ -87,26 +91,31 @@ macroDWList_nYear_3_list = macroDWList_nYear_3_samps %>%
 saveRDS(macroDWList_nYear_3_list, here('ignore/macroDWList_nYear_3_list.rds'))
 ```
 
+To run this on all ~5200 taxa-site observations takes ~10 hours. We could modify the code to estimate body sizes for each taxon in a hierarchical model that uses total information from all sites & years to estimate body sizes in sites where we only have a single years' observation using partial pooling across all samples.
+
 ```{r fit-models, echo=TRUE, eval = FALSE}
+# load in the large 3+ years list
 macroDWList_nYear_3_list = readRDS(here('ignore/macroDWList_nYear_3_list.rds'))
 # set the model names for each site-taxa
 mod_names = lapply(names(macroDWList_nYear_3_list), FUN = function(a) gsub("^(\\w+)\\s\\/\\s(\\w+)$", "\\2_\\1",a))
-# 
-# x = macroDWList_nYear_3_list[[1]]
-# y = unlist(mod_names[1])
-# debugonce(fit_max_model_named)
-# fit_max_model_named(df = x, mod_name = y, rerun = TRUE)
+
+# test the named fit_max_model function
+ # x = macroDWList_nYear_3_list[[1]]
+ # y = unlist(mod_names[1])
+ # debugonce(fit_max_model_named)
+ # z =  fit_max_model_named(df = x, mod_name = y, rerun = TRUE, overwrite = TRUE, model_types = 'evt')
+
 # set the multisession options for parallel work
 future::plan("multisession", workers = 10)
 
-# walk through each taxa and fit multi models in fishmax
-# these models are saved to the data/models/ folder
+# walk through each taxa and fit multi gvt models in fishmax
+# these models are saved to the ignore/models/ folder
 # fitting all ~5200 models with the above multisession plan took 
 # ~ 10 hours to complete
 furrr::future_walk2(
-   macroDWList_nYear_3_list[1:2],
-   mod_names[1:2],
-   ~fit_max_model_named(df = .x, mod_name = .y, rerun = TRUE, overwrite = FALSE),
+   macroDWList_nYear_3_list,
+   mod_names,
+   ~fit_max_model_named(df = .x, mod_name = .y, rerun = TRUE, overwrite = FALSE, model_types = c('gvt','gvt_gumbel')),
    .options = furrr_options(
      seed = 1312
      )
@@ -114,25 +123,36 @@ furrr::future_walk2(
 
 ```
 
-```{r extract-max-size}
+We can then extract the sizes
+
+```{r extract-max-size, eval = FALSE, echo=TRUE}
 
 modPaths = list.files(here('ignore/models/'), pattern ='.rds', full.names = TRUE)
 
-debugonce(get_max_wide)
-x = readRDS(file = modPaths[1])
-get_max_wide(mod_path = modPaths[1])
+## test the get_max wide function
+# debugonce(get_max_wide)
+# x = readRDS(file = modPaths[1])
+# get_max_wide(mod_path = modPaths[1])
 
+## run all the models and save to a file for later
 modPaths %>% furrr::future_map(get_max_wide) %>% bind_rows() %>% saveRDS(., here('data/max_size.rds'))
-
 
 ```
 
+### Build a pooled model Negative Binomial count model and test
 
-### Build a pooled model and test
+As we mentioned above, we can consider using a hierarchical approach to this procedure. Also, there is a fundamental difference between the estimand in the above Extreme Value Theory (EVT) models and the data we are passing to the function. The EVT models are using just the maximum values observed across the sampling years to estimate the largest size -- so we are only using something like 3-15 data points. Alternatively, we can try to use all the size information to estimate the maximum body size.
 
-```{r simulate-multisite data}
+I put together a hierarchical model in stan that uses a negative binomial count model to parameterize the entire body size distribution and then uses Posterior Predictive Simulations to estimate the maximum body size observed using a standardized 'effort'. This model uses partial-pooling across sites to estimate the body size distribution, so we can use information across many sites to inform poorly sampled sites.
+
+Below, we test this model against the models in `fishmax`. I deliberately choose a low value for the site with 1 sample to determine the effect of the pooling.
+
+<details>
+
+```{r simulate-multisite data, echo=TRUE}
+## set the simulation parameters
 simPars = data.frame(site = c('a','b','c','d','e'),
-                     mu = c(2.5,2.8,3.0,2.2,4.5),
+                     mu = c(10,8,7.8, 3, 9.5),
                      sigma = c(1.0,1.2,1.5,0.5,1.8),
                      k = c(4,3,3,1,2),
                      stringsAsFactors = FALSE)
@@ -140,199 +160,177 @@ simPars = data.frame(site = c('a','b','c','d','e'),
 simPars$n = list(c(100,150,200,110),
                            c(100,200,210),
                            c(500,600,700),
-                           c(250),
+                           c(50),
                            c(200,220))
 
-simulation = function(simPars, seed = 1312){
-  if (!requireNamespace("truncnorm", quietly = TRUE)) {
-    stop("Package 'truncnorm' must be installed.")
-  }
+# show histograms of body size distributions for 10,000 individuals
+simList = mapply(FUN = truncnorm::rtruncnorm,mean = c(10,8,7.8, 3, 9.5),sd = c(1.0,1.2,1.5,0.5,1.8),
+                 MoreArgs = list(n = 1e4,
+                                 a = 0))
+# plot the distributions
+par(mfrow = c(2,3))
+apply(simList,2,hist)
 
-  required_columns <- c("site", "mu", "sigma", "k", "n")
-
-  if (!all(required_columns %in% names(simPars))) {
-    stop(
-      "simPars must contain: ",
-      paste(required_columns, collapse = ", ")
-    )
-  }
-
-  if (any(simPars$mu <= 0)) {
-    stop("All mu values must be positive.")
-  }
-
-  if (any(simPars$sigma <= 0)) {
-    stop("All sigma values must be positive.")
-  }
-
-  if (any(simPars$k < 1)) {
-    stop("Each site must have at least one sampling event.")
-  }
-
-  if (!all(lengths(simPars$n) == simPars$k)) {
-    stop(
-      "For every site, length(n[[site]]) must equal k."
-    )
-  }
-
-  if (any(unlist(simPars$n) < 1)) {
-    stop("All event-level sample sizes must be at least 1.")
-  }
-
-  set.seed(seed)
-
-  S <- nrow(simPars)
-  K <- sum(simPars$k)
-
-  event_table <- vector("list", K)
-  size_blocks <- vector("list", K)
-
-  event_id <- 0L
-
-  for (s in seq_len(S)) {
-    for (j in seq_len(simPars$k[s])) {
-      event_id <- event_id + 1L
-
-      n_j <- as.integer(simPars$n[[s]][j])
-
-      x_j <- truncnorm::rtruncnorm(
-        n = n_j,
-        a = 0,
-        b = Inf,
-        mean = simPars$mu[s],
-        sd = simPars$sigma[s]
-      )
-
-      # Each block contains all observations from one event.
-      size_blocks[[event_id]] <- x_j
-
-      event_table[[event_id]] <- data.frame(
-        event_id = event_id,
-        event_within_site = j,
-        site = simPars$site[s],
-        site_id = s,
-        n_per_sample = n_j,
-        stringsAsFactors = FALSE
-      )
-    }
-  }
-
-  event_table <- do.call(rbind, event_table)
-
-  # Concatenation preserves contiguous observations within events.
-  x <- unlist(
-    size_blocks,
-    use.names = FALSE
-  )
-
-  event_table$start_idx <-
-    cumsum(event_table$n_per_sample) -
-    event_table$n_per_sample +
-    1L
-
-  observation_table <- data.frame(
-    event_id = rep(
-      event_table$event_id,
-      times = event_table$n_per_sample
-    ),
-    event_within_site = rep(
-      event_table$event_within_site,
-      times = event_table$n_per_sample
-    ),
-    site = rep(
-      event_table$site,
-      times = event_table$n_per_sample
-    ),
-    site_id = rep(
-      event_table$site_id,
-      times = event_table$n_per_sample
-    ),
-    x = x,
-    stringsAsFactors = FALSE
-  )
-
-  stan_data <- list(
-    S = as.integer(S),
-    K = as.integer(K),
-    n_obs = as.integer(length(x)),
-    x = as.numeric(x),
-    n_per_sample = as.integer(
-      event_table$n_per_sample
-    ),
-    start_idx = as.integer(
-      event_table$start_idx
-    ),
-    site_id = as.integer(
-      event_table$site_id
-    )
-  )
-
-  site_truth <- data.frame(
-    site_id = seq_len(S),
-    site = simPars$site,
-    mu_true = simPars$mu,
-    sigma_true = simPars$sigma,
-    k_observed = simPars$k,
-    mean_n_observed = vapply(
-      simPars$n,
-      mean,
-      numeric(1)
-    ),
-    stringsAsFactors = FALSE
-  )
-
-  list(
-    stan_data = stan_data,
-    observations = observation_table,
-    events = event_table,
-    site_truth = site_truth
-  )
-}
-
+## simulate the sampling process and spit out in stan_data format
 sim = simulation(simPars = simPars, seed = 1312)
 
-stan_data = sim$stan_data
-stan_data$k_ref = 20L
+# aggregate to test the simulated observations
+# add the max values observed from 10,000 inds for a sanity check
 
-
-sim$events
-
-aggregate(
-  x ~ site,
-  data = sim$observations,
-  FUN = function(z) {
-    c(
-      mean = mean(z),
-      sd = sd(z),
-      min = min(z),
-      max = max(z)
+simAgg = do.call(
+  data.frame,
+  aggregate(
+    x ~ site,
+    data = sim$observations,
+    FUN = function(z) {
+      c(
+        mean = mean(z),
+        sd = sd(z),
+        min = min(z),
+        max = max(z)
+        )
+    }
     )
-  }
-)
+  ) %>% 
+  bind_cols(
+    data.frame(
+    x.mean.1e4 = apply(simList,2,mean),
+    x.sd.1e4 = apply(simList,2,sd),
+    x.max.1e4 = apply(simList,2,max)
+    )
+  ) 
 
+simAgg %>% 
+  knitr::kable(.)
 
 ```
 
-```{r test-efs_pooled}
-library(cmdstanr)
+The x.max from the 10,000 individual simulations have a slightly larger max as expected but everything is pretty close, as expected.
+
+</details>
+
+```{r test-efs_pooled, warning=FALSE, message=FALSE}
+
+## pull out the stan_data from sim and add the reference sample #
+stan_data = sim$stan_data
+stan_data$k_ref = 20L
+
+# compile stan model
 mod = cmdstan_model(here('code/stan/neg-bin_count_pooled.stan'))
 
-fit = mod$sample(
-  data = stan_data,
-  seed = 1312,
-  chains = 4,
-  parallel_chains = 4,
-  threads_per_chain = 1,
-  iter_warmup = 1000,
-  iter_sampling = 1000,
-  adapt_delta = 0.95,
-  max_treedepth = 12,
-  refresh = 100
-)
+# fit the model
+negbin_fit = mod$sample(
+    data = stan_data,
+    seed = 1312,
+    chains = 4,
+    parallel_chains = 4,
+    iter_warmup = 1000,
+    iter_sampling = 1000,
+    adapt_delta = 0.95,
+    max_treedepth = 12,
+    refresh = 0
+  )
 
-parameter_summary <- fit$summary()
+parameter_summary <- negbin_fit$summary()
 
-parameter_summary
-sim$site_truth
+# parameter_summary
+# sim$site_truth
+
+```
+
+We can check the $L_{max}$ estimates from all the models and compare using one site. Let's check this for one site. I will not choose the site that we purposefully did a deviation.
+
+```{r test-gvt, eval = TRUE, echo = TRUE}
+
+# select just one site
+site_a = sim$observations %>% 
+  dplyr::filter(site == 'a') %>% 
+  named_group_split(event_within_site) %>% 
+  map(~dplyr::select(.x, x) %>% unlist)
+
+fit = fit_max_model(site_a)
+
+get_max(fit, ci = 0.95) %>% 
+  bind_rows(
+    parameter_summary[which(parameter_summary$variable == 'max_ref_rep[1]'),
+                  c('median', 'q5','q95')] %>% 
+    dplyr::mutate(model = 'negbin') %>% 
+    dplyr::select(model, `max_fit.50%` = median, `max_lwr.2.5%` = q5, `max_upr.97.5%` = q95)
+  ) %>% 
+  bind_rows(
+    data.frame(
+      model = 'sim',
+      'max_fit.50%' = unlist(simAgg[1, c('x.max')]),
+      'max_lwr.2.5%' = NA,
+      'max_upr.97.5%' = NA,
+      check.names = FALSE)
+    ) %>% 
+  knitr::kable(.)
+
+```
+
+These simulations and model comparisons show that we do a pretty good job of capturing the signal in this site. We can't fit a model with `fishmax` because we only have a single sample, but let's check on the hierarchical model which can use only a single year.
+
+```{r shrinkage-check}
+# select just one site
+parameter_summary[
+  which(parameter_summary$variable == 'max_ref_rep[4]'),
+  c('median', 'q5','q95')
+  ] %>% 
+  dplyr::mutate(model = 'negbin') %>% 
+  dplyr::select(model, `max_fit.50%` = median, `max_lwr.2.5%` = q5, `max_upr.97.5%` = q95) %>% 
+  bind_rows(
+    data.frame(
+      model = 'sim',
+      'max_fit.50%' = unlist(simAgg[4, c('x.max')]),
+      'max_lwr.2.5%' = NA,
+      'max_upr.97.5%' = NA,
+      check.names = FALSE)
+    ) %>% 
+  knitr::kable(.)
+```
+
+There is a bit of change, we see a `r (5.200-4.854)/4.854*100`% change from the simulation due to the partial-pooling.
+
+```{r full-NEON-analysis}
+macroTaxaList = readRDS(here('data/derived-data/macroTaxaList.rds'))
+
+# convert the taxa sample lists in the correct format for the negative binomial model
+x = macroTaxaList[[1]] %>% 
+  named_group_split(siteID, collectYear) %>% 
+  map(~.x %>% 
+            pmap(~rep(x = ..4, times = ..6)) %>% 
+        list() %>%
+        unlist %>% midpoint_resample_vec %>% 
+        as_tibble) %>% 
+  bind_rows(.id = 'id')
+
+make_stanData_taxa = function(df = NULL){
+  taxaName = df$acceptedTaxonID
+  
+  siteYearList = df %>% 
+    named_group_split(siteID, collectYear) %>% 
+    map(~.x %>% 
+          pmap(~rep(x = ..4, times = ..6)) %>% 
+          list %>% 
+          unlist %>% 
+          midpoint_resample_vec %>% 
+          as_tibble) %>% 
+  bind_rows(.id = 'id')
+  
+  
+  
+  
+}
+
+
+
+        select(sizeClass) %>%
+        mutate(sizeClass_est = midpoint_resample_vec(sizeClass)) %>% 
+        select(sizeClass_est) %>% 
+        unlist)
+stan_data
+
+
 
 ```

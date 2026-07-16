@@ -102,6 +102,8 @@ parameters {
   vector[S] z_lambda;
 
   // Negative-binomial dispersion on the log scale
+  // this is not estimated for each site but is shared
+  // across sites
   real log_phi;
 }
 
