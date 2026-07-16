@@ -295,13 +295,11 @@ There is a bit of change, we see a `r (5.200-4.854)/4.854*100`% change from the 
 macroTaxaList = readRDS(here('data/derived-data/macroTaxaList.rds'))
 
 # convert the taxa sample lists in the correct format for the negative binomial model
-macroTaxaStanData= macroTaxaList %>% 
+macroTaxaList %>% 
   future_map(~make_stanData_taxa(.x),
-             furrr_options = list(seed= 1312))
-
-
-# this is suprisingly a large file. saved to ignore/ folder.
-saveRDS(macroTaxaStanData, here('ignore/macroTaxaStanData.rds'))
+             .options = furrr_options(seed= 1312)) %>% 
+  # this is suprisingly a large file. saved to ignore/ folder.
+saveRDS(here('ignore/macroTaxaStanData.rds'))
 
 
 ```
