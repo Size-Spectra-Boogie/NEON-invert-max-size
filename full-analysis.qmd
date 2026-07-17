@@ -105,7 +105,7 @@ mod_names = lapply(names(macroDWList_nYear_3_list), FUN = function(a) gsub("^(\\
  # z =  fit_max_model_named(df = x, mod_name = y, rerun = TRUE, overwrite = TRUE, model_types = 'evt')
 
 # set the multisession options for parallel work
-future::plan("multisession", workers = 10)
+future::plan("multisession", workers = 6)
 
 # walk through each taxa and fit multi gvt models in fishmax
 # these models are saved to the ignore/models/ folder
@@ -306,4 +306,20 @@ saveRDS(here('ignore/macroTaxaStanData.rds'))
 
 ```{r run-negbin-taxa}
 
+# compile stan model
+mod = cmdstan_model(here('code/stan/neg-bin_count_pooled.stan'))
 
+# fit the model
+negbin_fit = mod$sample(
+    data = stan_data,
+    seed = 1312,
+    chains = 4,
+    parallel_chains = 4,
+    iter_warmup = 1000,
+    iter_sampling = 1000,
+    adapt_delta = 0.95,
+    max_treedepth = 12,
+    refresh = 0
+  )
+
+```
