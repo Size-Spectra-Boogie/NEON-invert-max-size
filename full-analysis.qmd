@@ -291,7 +291,7 @@ parameter_summary[
 
 There is a bit of change, we see a `r (5.200-4.854)/4.854*100`% change from the simulation due to the partial-pooling.
 
-```{r full-NEON-analysis}
+```{r full-NEON-analysis, eval=FALSE, echo=TRUE}
 macroTaxaList = readRDS(here('data/derived-data/macroTaxaList.rds'))
 
 # convert the taxa sample lists in the correct format for the negative binomial model
@@ -301,25 +301,34 @@ macroTaxaList %>%
   # this is suprisingly a large file. saved to ignore/ folder.
 saveRDS(here('ignore/macroTaxaStanData.rds'))
 
-
 ```
 
 ```{r run-negbin-taxa}
 
+# set a future plan for multisession fitting if one isn't already set
+if(!inherits(plan(), "multisession")){
+  ifelse(parallelly::availableCores() == 24,future::plan("multisession", workers = 15), future::plan("multisession", workers = 6))
+}
+
 # compile stan model
 mod = cmdstan_model(here('code/stan/neg-bin_count_pooled.stan'))
 
-# fit the model
-negbin_fit = mod$sample(
-    data = stan_data,
-    seed = 1312,
-    chains = 4,
-    parallel_chains = 4,
-    iter_warmup = 1000,
-    iter_sampling = 1000,
-    adapt_delta = 0.95,
-    max_treedepth = 12,
-    refresh = 0
+macroTaxaStanData = readRDS(here('ignore/macroTaxaStanData.rds'))
+taxaNames = names(macroTaxaStanData)
+
+### run tests with one model to test overwrite
+# x = macroTaxaStanData[[1]]
+# y = taxaNames[1]
+# debugonce(fit_negbin_named)
+# fit_negbin_named(df = x, taxaName = y, rerun = TRUE, overwrite = TRUE)
+# z = ABISP_negbin$summary()
+
+# fit the models. This will overwrite existing models. These are saved in the ignore/ folder
+future_walk2(
+  macroTaxaStanData,
+  taxaNames,
+  ~fit_negbin_named(df = .x, taxaName = .y, rerun = TRUE, overwrite = FALSE),
+  .options = furrr_options(seed = 1312)
   )
 
 ```

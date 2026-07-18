@@ -232,7 +232,7 @@ make_stanData_taxa = function(df = NULL){
     select(count) %>% 
     unlist %>% unname
   start_idx = c(1,(cumsum(n_per_sample)+1)) %>% head(.,-1)
-  site_id = as.integer(as.factor(siteYearDf$siteID))
+  site_id = as.integer(as.factor(siteYearDf$siteID))[start_idx]
   k_ref = 20L
   
   return(stan_data = list(
@@ -246,3 +246,35 @@ make_stanData_taxa = function(df = NULL){
     k_ref = k_ref
   ))
 }
+
+#'
+#'
+#'
+fit_negbin_named = function(df = NULL, taxaName = NULL, rerun = FALSE, overwrite = FALSE){
+  filePath = paste0(here("ignore/models"),"/",taxaName,"_negbin.rds")
+  if(any(rerun, !file.exists(filePath))){
+    if(all(file.exists(filePath),!overwrite)){
+      warning('Model file already exists and `overwrite` = FALSE. Set to TRUE to overwrite existing files.')
+      return(NULL)
+    }
+  fit = mod$sample(
+    data = df,
+    seed = 1312,
+    chains = 4,
+    parallel_chains = 4,
+    iter_warmup = 1000,
+    iter_sampling = 1000,
+    adapt_delta = 0.95,
+    max_treedepth = 12,
+    refresh = 0
+  )
+  fit$save_object(file = filePath)
+  print(paste0('File saved as: ignore/models/',taxaName,'_negbin.rds'))
+  return(NULL)
+  } else{
+    print(paste("Model ",taxaName," exists. To overwrite, set `rerun` = TRUE and `overwrite` = TRUE"))
+  return(NULL)
+    }
+}
+
+# fit_negbin_named = purrr::safely(fit_negbin_named)
