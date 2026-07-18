@@ -235,7 +235,7 @@ make_stanData_taxa = function(df = NULL){
   site_id = as.integer(as.factor(siteYearDf$siteID))[start_idx]
   k_ref = 20L
   
-  return(stan_data = list(
+  stan_data = list(
     S = S,
     K = K,
     n_obs = n_obs,
@@ -243,26 +243,53 @@ make_stanData_taxa = function(df = NULL){
     n_per_sample = n_per_sample,
     start_idx = start_idx,
     site_id = site_id,
-    k_ref = k_ref
-  ))
+    k_ref = k_ref,
+    # set upper mu limit to generous but reasonable
+    mu_upper = 200,
+    # set upper sigma limit to generous but reasonable
+    sigma_upper = 100,
+    prior_only = 0
+  )
+  
+  # stan_data$mu_upper <- max(
+  #   200,
+  #   10 * max(stan_data$x)
+  # )
+  # 
+  # stan_data$sigma_upper <- max(
+  #   200,
+  #   10 * stats::sd(stan_data$x)
+  # )
+  
+  return(stan_data = stan_data)
 }
 
 #'
 #'
 #'
-fit_negbin_named = function(df = NULL, taxaName = NULL, rerun = FALSE, overwrite = FALSE){
+fit_negbin_named = function(stan_data = NULL, taxaName = NULL, rerun = FALSE, overwrite = FALSE){
   filePath = paste0(here("ignore/models"),"/",taxaName,"_negbin.rds")
+  print(taxaName)
   if(any(rerun, !file.exists(filePath))){
     if(all(file.exists(filePath),!overwrite)){
       warning('Model file already exists and `overwrite` = FALSE. Set to TRUE to overwrite existing files.')
       return(NULL)
     }
+    chains = 4L
+    init_list = make_init_list_stable(
+      stan_data = stan_data,
+      chains = chains,
+      seed = 1312
+    )
   fit = mod$sample(
-    data = df,
+    data = stan_data,
     seed = 1312,
-    chains = 4,
-    parallel_chains = 4,
-    iter_warmup = 1000,
+    chains = chains,
+    parallel_chains = chains,
+    
+    init = init_list,
+    
+    iter_warmup = 1500,
     iter_sampling = 1000,
     adapt_delta = 0.95,
     max_treedepth = 12,
@@ -278,3 +305,353 @@ fit_negbin_named = function(df = NULL, taxaName = NULL, rerun = FALSE, overwrite
 }
 
 # fit_negbin_named = purrr::safely(fit_negbin_named)
+
+# set initial values across all models
+
+#'
+#'
+#'
+make_init_list <- function(
+    stan_data,
+    chains = 4L,
+    seed = 1234L
+) {
+  stopifnot(
+    is.list(stan_data),
+    length(stan_data$x) == stan_data$n_obs,
+    length(stan_data$n_per_sample) == stan_data$K,
+    length(stan_data$site_id) == stan_data$K,
+    sum(stan_data$n_per_sample) == stan_data$n_obs
+  )
+  
+  S <- stan_data$S
+  
+  # Site identity for each individual size observation
+  obs_site <- rep(
+    stan_data$site_id,
+    times = stan_data$n_per_sample
+  )
+  
+  # Global fallbacks
+  global_mean_x <- mean(stan_data$x)
+  global_sd_x <- stats::sd(stan_data$x)
+  
+  if (!is.finite(global_sd_x) || global_sd_x <= 0) {
+    global_sd_x <- max(global_mean_x * 0.25, 0.1)
+  }
+  
+  global_mean_n <- mean(stan_data$n_per_sample)
+  
+  # Empirical size summaries by site
+  site_mu <- vapply(
+    seq_len(S),
+    function(s) {
+      xs <- stan_data$x[obs_site == s]
+      
+      if (length(xs) > 0L) {
+        max(mean(xs), 1e-3)
+      } else {
+        max(global_mean_x, 1e-3)
+      }
+    },
+    numeric(1)
+  )
+  
+  site_sigma <- vapply(
+    seq_len(S),
+    function(s) {
+      xs <- stan_data$x[obs_site == s]
+      
+      if (length(xs) >= 2L) {
+        sx <- stats::sd(xs)
+        
+        if (is.finite(sx) && sx > 0) {
+          return(max(sx, 0.05))
+        }
+      }
+      
+      max(global_sd_x, 0.05)
+    },
+    numeric(1)
+  )
+  
+  # Mean equal-effort count per event at each site
+  # Zero-count events are retained here.
+  site_lambda <- vapply(
+    seq_len(S),
+    function(s) {
+      ns <- stan_data$n_per_sample[
+        stan_data$site_id == s
+      ]
+      
+      if (length(ns) > 0L) {
+        max(mean(ns), 0.1)
+      } else {
+        max(global_mean_n, 0.1)
+      }
+    },
+    numeric(1)
+  )
+  
+  log_site_mu <- log(site_mu)
+  log_site_sigma <- log(site_sigma)
+  log_site_lambda <- log(site_lambda)
+  
+  # Across-site initial centers
+  alpha_mu_init <- mean(log_site_mu)
+  alpha_sigma_init <- mean(log_site_sigma)
+  alpha_lambda_init <- mean(log_site_lambda)
+  
+  safe_sd <- function(x, fallback) {
+    sx <- stats::sd(x)
+    
+    if (!is.finite(sx) || sx <= 0) {
+      fallback
+    } else {
+      sx
+    }
+  }
+  
+  # Initial among-site heterogeneity
+  tau_mu_init <- min(
+    max(safe_sd(log_site_mu, 0.20), 0.10),
+    1.50
+  )
+  
+  tau_sigma_init <- min(
+    max(safe_sd(log_site_sigma, 0.20), 0.10),
+    1.50
+  )
+  
+  # Broader because counts may differ by hundreds-fold among sites
+  tau_lambda_init <- min(
+    max(safe_sd(log_site_lambda, 0.75), 0.30),
+    2.50
+  )
+  
+  # Standardized non-centered site effects
+  z_mu_init <-
+    (log_site_mu - alpha_mu_init) /
+    tau_mu_init
+  
+  z_sigma_init <-
+    (log_site_sigma - alpha_sigma_init) /
+    tau_sigma_init
+  
+  z_lambda_init <-
+    (log_site_lambda - alpha_lambda_init) /
+    tau_lambda_init
+  
+  set.seed(seed)
+  
+  lapply(
+    seq_len(chains),
+    function(chain_id) {
+      list(
+        alpha_log_mu =
+          alpha_mu_init +
+          stats::rnorm(1, 0, 0.01),
+        
+        alpha_log_sigma =
+          alpha_sigma_init +
+          stats::rnorm(1, 0, 0.01),
+        
+        alpha_log_lambda =
+          alpha_lambda_init +
+          stats::rnorm(1, 0, 0.02),
+        
+        tau_log_mu =
+          tau_mu_init,
+        
+        tau_log_sigma =
+          tau_sigma_init,
+        
+        tau_log_lambda =
+          tau_lambda_init,
+        
+        z_mu =
+          z_mu_init +
+          stats::rnorm(S, 0, 0.01),
+        
+        z_sigma =
+          z_sigma_init +
+          stats::rnorm(S, 0, 0.01),
+        
+        z_lambda =
+          z_lambda_init +
+          stats::rnorm(S, 0, 0.01),
+        
+        log_phi =
+          log(20) +
+          stats::rnorm(1, 0, 0.02)
+      )
+    }
+  )
+}
+
+make_init_list_stable <- function(
+    stan_data,
+    chains = 4L,
+    seed = 1234L
+) {
+  stopifnot(
+    is.list(stan_data),
+    length(stan_data$x) == stan_data$n_obs,
+    length(stan_data$n_per_sample) == stan_data$K,
+    length(stan_data$site_id) == stan_data$K,
+    sum(stan_data$n_per_sample) == stan_data$n_obs,
+    is.finite(stan_data$mu_upper),
+    is.finite(stan_data$sigma_upper)
+  )
+  
+  S <- stan_data$S
+  
+  obs_site <- rep(
+    stan_data$site_id,
+    times = stan_data$n_per_sample
+  )
+  
+  global_mean_x <- mean(stan_data$x)
+  global_sd_x <- stats::sd(stan_data$x)
+  
+  if (!is.finite(global_sd_x) || global_sd_x <= 0) {
+    global_sd_x <- max(0.1, 0.25 * global_mean_x)
+  }
+  
+  site_mu <- vapply(
+    seq_len(S),
+    function(s) {
+      xs <- stan_data$x[obs_site == s]
+      
+      value <- if (length(xs)) {
+        mean(xs)
+      } else {
+        global_mean_x
+      }
+      
+      min(
+        max(value, 1e-6),
+        0.95 * stan_data$mu_upper
+      )
+    },
+    numeric(1)
+  )
+  
+  site_sigma <- vapply(
+    seq_len(S),
+    function(s) {
+      xs <- stan_data$x[obs_site == s]
+      
+      value <- if (length(xs) >= 2L) {
+        stats::sd(xs)
+      } else {
+        global_sd_x
+      }
+      
+      if (!is.finite(value) || value <= 0) {
+        value <- global_sd_x
+      }
+      
+      min(
+        max(value, 1e-4),
+        0.95 * stan_data$sigma_upper
+      )
+    },
+    numeric(1)
+  )
+  
+  site_lambda <- vapply(
+    seq_len(S),
+    function(s) {
+      ns <- stan_data$n_per_sample[
+        stan_data$site_id == s
+      ]
+      
+      if (length(ns)) {
+        max(mean(ns), 0.1)
+      } else {
+        max(mean(stan_data$n_per_sample), 0.1)
+      }
+    },
+    numeric(1)
+  )
+  
+  log_mu_init <- log(site_mu)
+  log_sigma_init <- log(site_sigma)
+  log_lambda_init <- log(site_lambda)
+  
+  safe_sd <- function(x, fallback) {
+    value <- stats::sd(x)
+    
+    if (!is.finite(value) || value <= 0) {
+      fallback
+    } else {
+      value
+    }
+  }
+  
+  alpha_mu_init <- mean(log_mu_init)
+  alpha_sigma_init <- mean(log_sigma_init)
+  alpha_lambda_init <- mean(log_lambda_init)
+  
+  tau_mu_init <- min(
+    max(safe_sd(log_mu_init, 0.2), 0.05),
+    2
+  )
+  
+  tau_sigma_init <- min(
+    max(safe_sd(log_sigma_init, 0.2), 0.05),
+    2
+  )
+  
+  tau_lambda_init <- min(
+    max(safe_sd(log_lambda_init, 0.75), 0.2),
+    3
+  )
+  
+  z_lambda_init <-
+    (log_lambda_init - alpha_lambda_init) /
+    tau_lambda_init
+  
+  set.seed(seed)
+  
+  lapply(
+    seq_len(chains),
+    function(chain_id) {
+      list(
+        alpha_log_mu =
+          alpha_mu_init +
+          stats::rnorm(1, 0, 0.01),
+        
+        alpha_log_sigma =
+          alpha_sigma_init +
+          stats::rnorm(1, 0, 0.01),
+        
+        log_mu_site =
+          log_mu_init +
+          stats::rnorm(S, 0, 0.005),
+        
+        log_sigma_site =
+          log_sigma_init +
+          stats::rnorm(S, 0, 0.005),
+        
+        tau_log_mu = tau_mu_init,
+        tau_log_sigma = tau_sigma_init,
+        
+        alpha_log_lambda =
+          alpha_lambda_init +
+          stats::rnorm(1, 0, 0.02),
+        
+        tau_log_lambda = tau_lambda_init,
+        
+        z_lambda =
+          z_lambda_init +
+          stats::rnorm(S, 0, 0.01),
+        
+        log_phi =
+          log(20) +
+          stats::rnorm(1, 0, 0.02)
+      )
+    }
+  )
+}

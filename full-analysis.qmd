@@ -208,21 +208,32 @@ The x.max from the 10,000 individual simulations have a slightly larger max as e
 
 </details>
 
-```{r test-efs_pooled, warning=FALSE, message=FALSE}
+```{r test-hier_nb, warning=FALSE, message=FALSE}
 
 ## pull out the stan_data from sim and add the reference sample #
 stan_data = sim$stan_data
 stan_data$k_ref = 20L
+stan_data$mu_upper <- max(
+  1000,
+  10 * max(stan_data$x)
+)
 
+stan_data$sigma_upper <- max(
+  1000,
+  10 * stats::sd(stan_data$x)
+)
 # compile stan model
-mod = cmdstan_model(here('code/stan/neg-bin_count_pooled.stan'))
+# mod = cmdstan_model(here('code/stan/neg-bin_count_pooled.stan')) #old nb model before stabilizing priors and initialization values to help sampling
+mod = cmdstan_model(here('code/stan/hierarchical_nb_max_size_stable.stan'))
 
+init_list= make_init_list_stable(stan_data, chains = 4, seed = 1312)
 # fit the model
 negbin_fit = mod$sample(
     data = stan_data,
     seed = 1312,
     chains = 4,
     parallel_chains = 4,
+    init = init_list,
     iter_warmup = 1000,
     iter_sampling = 1000,
     adapt_delta = 0.95,
@@ -294,10 +305,29 @@ There is a bit of change, we see a `r (5.200-4.854)/4.854*100`% change from the 
 ```{r full-NEON-analysis, eval=FALSE, echo=TRUE}
 macroTaxaList = readRDS(here('data/derived-data/macroTaxaList.rds'))
 
+# get rough mean sizes quickly to set priors on upper mu bound
+means = macroTaxaList %>% 
+  map(~.x %>% select(sizeClass) %>% unlist %>%  mean(., na.rm = TRUE)) %>% 
+  bind_rows %>% unlist
+hist(log10(means))
+mean(log(means));mean(means);max(means)
+# [1] 1.323187
+# [1] 5.177346
+# [1] 115
+sds = macroTaxaList %>% 
+  map(~.x %>% select(sizeClass) %>% unlist %>%  sd(., na.rm = TRUE)) %>% 
+  bind_rows %>% unlist
+hist(log10(sds))
+mean(sds, na.rm = TRUE);max(sds, na.rm = TRUE)
+#[1] 2.194067
+#[1] 26.71454
+# we have some means above 100
+# we set mu_upper to 200 and sigma_upper to 100
 # convert the taxa sample lists in the correct format for the negative binomial model
 macroTaxaList %>% 
-  future_map(~make_stanData_taxa(.x),
-             .options = furrr_options(seed= 1312)) %>% 
+  map(~make_stanData_taxa(.x)#,
+             # .options = furrr_options(seed= 1312)
+      ) %>% 
   # this is suprisingly a large file. saved to ignore/ folder.
 saveRDS(here('ignore/macroTaxaStanData.rds'))
 
@@ -307,28 +337,66 @@ saveRDS(here('ignore/macroTaxaStanData.rds'))
 
 # set a future plan for multisession fitting if one isn't already set
 if(!inherits(plan(), "multisession")){
-  ifelse(parallelly::availableCores() == 24,future::plan("multisession", workers = 15), future::plan("multisession", workers = 6))
+  if(parallelly::availableCores() == 24)
+    future::plan("multisession", workers = 10)
+  } else{
+    future::plan("multisession", workers = 6)
 }
 
 # compile stan model
-mod = cmdstan_model(here('code/stan/neg-bin_count_pooled.stan'))
+# mod = cmdstan_model(here('code/stan/neg-bin_count_pooled.stan'))
+# mod = cmdstan_model(here('code/stan/hierarchical_nb_max_size.stan'))
+mod = cmdstan_model(here('code/stan/hierarchical_nb_max_size_stable.stan'))
 
 macroTaxaStanData = readRDS(here('ignore/macroTaxaStanData.rds'))
 taxaNames = names(macroTaxaStanData)
 
 ### run tests with one model to test overwrite
-# x = macroTaxaStanData[[1]]
-# y = taxaNames[1]
+# stan_data = macroTaxaStanData[["AMIASP"]]
+# stan_data$mu_upper <- max(
+#   1000,
+#   10 * max(stan_data$x)
+# )
+# 
+# stan_data$sigma_upper <- max(
+#   1000,
+#   10 * stats::sd(stan_data$x)
+# )
+# y = "AMIASP"
 # debugonce(fit_negbin_named)
-# fit_negbin_named(df = x, taxaName = y, rerun = TRUE, overwrite = TRUE)
-# z = ABISP_negbin$summary()
+# fit_negbin_named(stan_data = stan_data, taxaName = y, rerun = TRUE, overwrite = TRUE)
+# z.3 = AMIASP_negbin$summary()
 
-# fit the models. This will overwrite existing models. These are saved in the ignore/ folder
-future_walk2(
-  macroTaxaStanData,
-  taxaNames,
-  ~fit_negbin_named(df = .x, taxaName = .y, rerun = TRUE, overwrite = FALSE),
-  .options = furrr_options(seed = 1312)
+# fit the models. This will overwrite existing models if overwrite = TRUE. These are saved in the ignore/ folder
+# future_walk2(
+#   macroTaxaStanData,
+#   taxaNames,
+#   ~fit_negbin_named(df = .x, taxaName = .y, rerun = TRUE, overwrite = FALSE),
+#   .options = furrr_options(seed = 1312)
+#   )
+walk2(
+   macroTaxaStanData,
+   taxaNames,
+   ~fit_negbin_named(stan_data  = .x, taxaName = .y, rerun = TRUE, overwrite = FALSE)
+   )
+```
+
+```{r get-nb-max}
+
+fit$summary(
+  variables = c(
+    "mu",
+    "sigma",
+    "lambda",
+    "phi",
+    "size_mean",
+    "size_median",
+    "expected_n_ref",
+    "max_ref_q025",
+    "max_ref_q50",
+    "max_ref_q975",
+    "max_ref_rep"
   )
+)
 
 ```
