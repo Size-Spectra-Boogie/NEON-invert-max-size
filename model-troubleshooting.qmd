@@ -1,0 +1,598 @@
+---
+title: "model-troubleshooting"
+format: html
+---
+
+Introduction
+------
+<link rel="stylesheet" type="text/css" href="http://cdn.datatables.net/1.10.5/css/jquery.dataTables.min.css">
+<script src="http://code.jquery.com/jquery-2.1.2.min.js"></script>
+<script src="http://cdn.datatables.net/1.10.5/js/jquery.dataTables.min.js"></script>
+<script type="text/javascript">
+         $(document).ready(function() {
+             $(".dtable").DataTable();
+         } );
+</script>
+
+```{r init, echo=FALSE, warning=FALSE, message=FALSE}
+here::i_am('full-analysis.qmd') 
+knitr::opts_chunk$set(echo = TRUE, eval = FALSE, warning = FALSE, message = FALSE)
+
+# Define a custom knitr hook for collapsing output
+knitr::knit_hooks$set(fig_collapse=function(before, options, envir) {
+  if (before) {
+    # Opening HTML tags for the collapsible container
+    paste('<details><summary>Click to view figures</summary><div>')
+  } else {
+    # Closing HTML tags
+    paste('</div></details>')
+  }
+})
+
+source(here::here('code/00_init.R'))
+
+```
+
+This page is for documenting the model checking procedures for the maximum size estimation models. The models were all fit originally using the hierarchical negative binomial model `code/stan/hierarchical_nb_max_size_stable`. With these fits, we identified a number of issues, so we are now working backwards to simpler models. I outline below the steps to keep a record for future.
+
+## Divergent transitions
+
+The original models had ~700, or about 50%, that exhibited divergent transitions after warmup. I should have realized at the outset that we are likely to have many taxa with only a single site, so the hierarchical structure of the model is obviously not appropriate. It turned out that ~400 only have a single site.
+
+```{r id-S-of-one}
+
+macroTaxaStanData = readRDS(here('ignore/macroTaxaStanData.rds')) 
+
+macroTaxaStanData %>% 
+  map_lgl(~.x$S == 1) %>% sum
+
+```
+
+This is likely a large part of the issue. Which became apparent with the checks below
+
+### Check models with divergences after sampling
+
+Lots of the models exhibit divergences after warming, most often this is ~1% of transitions, other times if can be up to ~20%. Below we go through a diagnostic procedure to better characterize where these divergences occur and hopefully we can better specify/constrain the model to eliminate this issue.
+
+```{r nb-divergences}
+nbFiles = list.files(here('ignore/models/'), '.rds', full.names = TRUE)
+
+nbDivergences = nbFiles %>% 
+  map(~check_divergences(filePath = .x))
+# what is the distribution of divergent #s
+nbDivergences %>% map(~.x %>% pluck('num_diverge') %>% unlist) %>% unlist %>% hist
+# what is maximum # of divergences
+nbDivergences %>% map(~.x %>% pluck('num_diverge') %>% unlist) %>% unlist %>% max
+
+#what is the 75-percentile # of divergences
+nbDivergences %>% map(~.x %>% pluck('num_diverge') %>% unlist) %>% unlist %>% quantile(., 0.75)
+
+
+# separate out the models with divergences
+nbDivergentFiles = nbFiles[nbDivergences %>% map(~pluck(.x, 'diverge')) %>% unlist]
+# check with a particularly problematic model
+highDiverge = nbDivergences %>% 
+  map(~.x %>% pluck('num_diverge') %>% unlist) %>% 
+  unlist 
+
+taxaDivergeList = nbDivergentFiles %>% 
+  map(~sapply(strsplit(sapply(strsplit(.x,"/"), "[", 10), "_"), "[",1))
+
+divergeStanData = macroTaxaStanData[names(macroTaxaStanData) %in% taxaDivergeList]
+
+# how many of the divergence taxa have only a single site?
+divergeStanData %>% 
+  map(~.x$S) %>% 
+  unlist %>%
+  keep(~.x == 1) %>% 
+  count()
+# all sites with only 1 site show divergences
+
+# how many of the divergence taxa have only 2 samples?
+divergeStanData %>% 
+  map(~.x$K) %>% 
+  unlist %>% 
+  keep(~.x == 2) %>% 
+  count()
+```
+
+To address this issue, we built a simpler single site model as that is the most straightforward way to address this issue. This model is `code/stan/single_nb_max_size_stable.stan`. So with this new approach, I refit just the taxa with observations at only a single site.
+
+```{r refit-S-of-one}
+# do a clean load of the stan data to ensure we don't mess anything up
+## I am only loading the single model here to ensure we don't accidentally overwrite a model we don't want to 
+single_mod = cmdstan_model(here('code/stan/single_nb_max_size_stable.stan'))
+
+macroTaxaStanData = readRDS(here('ignore/macroTaxaStanData.rds')) 
+# reorder macroTaxaStanData by most rows to fewest
+macroTaxaStanData = macroTaxaStanData[order(sapply(macroTaxaStanData, function(x) x$n_obs), decreasing = TRUE)]
+taxaNames = names(macroTaxaStanData)
+
+# first identify the locations of the data with only one site
+## convert to logical vector for subsetting stan data and names
+macroTaxaSingleVec = macroTaxaStanData %>% 
+  map_lgl(~.x$S == 1) %>% unlist 
+
+macroTaxaSingleStanData = macroTaxaStanData[macroTaxaSingleVec]
+singleTaxaNames = taxaNames[macroTaxaSingleVec]
+
+# model worked with a single taxa (on only two observations)
+# model worked with a single taxa on 22 observations
+
+# ran into an issue that interrupted the future session after many files were written
+modFiles = list.files(here('ignore/models/'), '.rds', full.names = TRUE)
+fileMeta = file.info(modFiles)
+targetTime = as.POSIXct("2026-07-22 17:54:00 CDT")
+recentFiles = modFiles[fileMeta$mtime > targetTime]
+
+taxaRecent = singleTaxaNames %>% 
+  map_lgl(~grepl(.x, recentFiles, ignore.case = TRUE) %>% sum %>% as.logical)
+
+x = macroTaxaSingleStanData[!taxaRecent]
+y = singleTaxaNames[!taxaRecent]
+# debugonce(fit_negbin_named)
+future::plan("multisession", workers = 10, gc = TRUE)
+future_walk2(
+   x,
+   y,
+   ~fit_negbin_named(stan_data  = .x, taxaName = .y, rerun = TRUE, overwrite = TRUE),
+  .options = furrr_options(seed = 1312, scheduling = Inf)
+   )
+# one of the models 3 chains failed
+```
+
+
+```{r check-ints}
+# make a list of initialization values for checking 
+init_lists = macroTaxaStanData %>% 
+  map(~make_init_list_stable(
+    stan_data = .x,
+    chains = 4L,
+    seed = 1312)
+    )
+saveRDS(init_lists, here('ignore/nb_init_lists.rds'))
+# code to check initialization values
+tau_log_lambda_inits = init_lists %>% 
+  future_map(
+    ~vapply(.x, function(x) x$tau_log_lambda, numeric(1))
+  ) %>% 
+  bind_rows(.id = 'taxaName') %>% 
+  t() %>% data.frame %>% 
+  tibble::rownames_to_column('taxaName') %>% 
+  mutate(max = pmax(X1,X2,X3,X4, na.rm = TRUE))
+hist(tau_log_lambda_inits$max)
+```
+
+
+```{r diagnostics-bad-models}
+
+fit = readRDS(x)
+
+diagnostics <- fit$diagnostic_summary(
+  diagnostics = c(
+    "divergences",
+    "treedepth",
+    "ebfmi"
+  ),
+  quiet = TRUE
+)
+
+diagnostics
+# a single chain is the main issue here
+sampler_diag <- fit$sampler_diagnostics(
+  format = "df"
+)
+
+divergence_rate <- mean(
+  sampler_diag$divergent__
+)#17% of transitions had divergences
+
+parameter_names <- posterior::variables(
+  fit$draws()
+)
+
+key_parameters <- grep(
+  paste0(
+    "^(",
+    paste(
+      c(
+        "alpha_log_mu",
+        "alpha_log_sigma",
+        "tau_log_mu",
+        "tau_log_sigma",
+        "log_mu_site\\[",
+        "log_sigma_site\\[",
+        "alpha_log_lambda",
+        "tau_log_lambda",
+        "z_lambda\\[",
+        "log_lambda\\[",
+        "log_phi",
+        "phi",
+        "mu\\[",
+        "sigma\\["
+      ),
+      collapse = "|"
+    ),
+    ")"
+  ),
+  parameter_names,
+  value = TRUE
+)
+
+key_parameters
+
+get_divergence_draws <- function(
+    fit,
+    variables
+) {
+  draws <- as.data.frame(
+    fit$draws(
+      variables = variables,
+      format = "df"
+    )
+  )
+
+  diagnostics <- as.data.frame(
+    fit$sampler_diagnostics(
+      format = "df"
+    )
+  )
+
+  draw_key <- paste(
+    draws$.chain,
+    draws$.iteration,
+    sep = ":"
+  )
+
+  diagnostic_key <- paste(
+    diagnostics$.chain,
+    diagnostics$.iteration,
+    sep = ":"
+  )
+
+  diagnostic_row <- match(
+    draw_key,
+    diagnostic_key
+  )
+
+  if (anyNA(diagnostic_row)) {
+    stop(
+      "Could not match all posterior draws ",
+      "to sampler diagnostics."
+    )
+  }
+
+  draws$divergent__ <-
+    diagnostics$divergent__[diagnostic_row]
+
+  draws$energy__ <-
+    diagnostics$energy__[diagnostic_row]
+
+  draws$accept_stat__ <-
+    diagnostics$accept_stat__[diagnostic_row]
+
+  draws$treedepth__ <-
+    diagnostics$treedepth__[diagnostic_row]
+
+  draws
+}
+
+divergence_draws <- get_divergence_draws(
+  fit,
+  key_parameters
+)
+
+divergent_draws_df <- divergence_draws[
+  divergence_draws$divergent__ == 1,
+]
+
+nondivergent_draws_df <- divergence_draws[
+  divergence_draws$divergent__ == 0,
+]
+
+screen_divergent_parameters <- function(
+    fit,
+    variables
+) {
+  dat <- get_divergence_draws(
+    fit = fit,
+    variables = variables
+  )
+
+  is_divergent <- dat$divergent__ == 1
+
+  if (!any(is_divergent)) {
+    return(
+      data.frame(
+        variable = variables,
+        n_divergent = 0L,
+        ks_distance = NA_real_,
+        median_shift_mad = NA_real_,
+        divergent_rank_median = NA_real_,
+        divergent_rank_iqr = NA_real_
+      )
+    )
+  }
+
+  results <- lapply(
+    variables,
+    function(variable) {
+      x <- dat[[variable]]
+
+      keep <- is.finite(x)
+
+      x <- x[keep]
+      div <- is_divergent[keep]
+
+      x_div <- x[div]
+      x_ok <- x[!div]
+
+      if (
+        length(x_div) < 2L ||
+        length(x_ok) < 2L
+      ) {
+        return(
+          data.frame(
+            variable = variable,
+            n_divergent = length(x_div),
+            ks_distance = NA_real_,
+            median_shift_mad = NA_real_,
+            divergent_rank_median = NA_real_,
+            divergent_rank_iqr = NA_real_
+          )
+        )
+      }
+
+      parameter_scale <- stats::mad(
+        x,
+        constant = 1.4826
+      )
+
+      if (
+        !is.finite(parameter_scale) ||
+        parameter_scale <= 0
+      ) {
+        parameter_scale <- stats::sd(x)
+      }
+
+      if (
+        !is.finite(parameter_scale) ||
+        parameter_scale <= 0
+      ) {
+        parameter_scale <- 1
+      }
+
+      ks_result <- suppressWarnings(
+        stats::ks.test(
+          x_div,
+          x_ok,
+          exact = FALSE
+        )
+      )
+
+      scaled_ranks <-
+        rank(
+          x,
+          ties.method = "average"
+        ) / (length(x) + 1)
+
+      div_ranks <- scaled_ranks[div]
+
+      data.frame(
+        variable = variable,
+        n_divergent = length(x_div),
+
+        median_divergent =
+          stats::median(x_div),
+
+        median_nondivergent =
+          stats::median(x_ok),
+
+        ks_distance =
+          unname(ks_result$statistic),
+
+        median_shift_mad =
+          abs(
+            stats::median(x_div) -
+              stats::median(x_ok)
+          ) / parameter_scale,
+
+        divergent_rank_median =
+          stats::median(div_ranks),
+
+        divergent_rank_iqr =
+          stats::IQR(div_ranks)
+      )
+    }
+  )
+
+  results <- do.call(
+    rbind,
+    results
+  )
+
+  results[
+    order(
+      results$ks_distance,
+      decreasing = TRUE,
+      na.last = TRUE
+    ),
+  ]
+}
+
+divergence_screen <- screen_divergent_parameters(
+  fit,
+  key_parameters
+)
+
+head(
+  divergence_screen,
+  20
+)
+
+make_bayesplot_nuts <- function(fit) {
+  diagnostics <- as.data.frame(
+    fit$sampler_diagnostics(
+      format = "df"
+    )
+  )
+
+  diagnostic_variables <- setdiff(
+    names(diagnostics),
+    c(
+      ".chain",
+      ".iteration",
+      ".draw"
+    )
+  )
+
+  long_list <- lapply(
+    diagnostic_variables,
+    function(variable) {
+      data.frame(
+        Chain = diagnostics$.chain,
+        Iteration = diagnostics$.iteration,
+        Parameter = variable,
+        Value = diagnostics[[variable]]
+      )
+    }
+  )
+
+  do.call(
+    rbind,
+    long_list
+  )
+}
+
+nuts_parameters <- make_bayesplot_nuts(
+  fit
+)
+
+top_parameters <- head(
+  divergence_screen$variable,
+  6
+)
+
+top_draws <- fit$draws(
+  variables = top_parameters,
+  format = "array"
+)
+
+bayesplot::mcmc_pairs(
+  top_draws,
+  pars = top_parameters,
+  np = nuts_parameters,
+  condition = bayesplot::pairs_condition(
+    nuts = "divergent__"
+  ),
+  off_diag_args = list(
+    alpha = 0.35,
+    size = 0.6
+  ),
+  grid_args = list(
+    top = "Divergent versus nondivergent draws"
+  )
+)
+
+bayesplot::mcmc_parcoord(
+  top_draws,
+  pars = top_parameters,
+  transformations = function(x) {
+    scale_value <- stats::mad(
+      x,
+      constant = 1.4826
+    )
+
+    if (
+      !is.finite(scale_value) ||
+      scale_value <= 0
+    ) {
+      scale_value <- stats::sd(x)
+    }
+
+    if (
+      !is.finite(scale_value) ||
+      scale_value <= 0
+    ) {
+      return(x - stats::median(x))
+    }
+
+    (
+      x - stats::median(x)
+    ) / scale_value
+  },
+  np = nuts_parameters
+)
+
+bayesplot::mcmc_trace(
+  top_draws,
+  pars = top_parameters,
+  np = nuts_parameters
+)
+
+stan_data = macroTaxaStanData[["DRUCOR"]]
+stan_data$mu_upper
+init_lists = readRDS(here('ignore/nb_init_lists.rds'))
+DRUCOR_initList = init_lists[["DRUCOR"]]
+
+```
+
+### Bad models
+
+Some of the models just have too few sites/samples to adequately and reasonably fit the model. We can prescreen these models using some minimum criteria such as # of sampling events. Below we explore the data and sampling space that we show divergences.
+
+```{r screen-bad-models}
+badTaxa = c(
+  "DRUCOR",
+)
+```
+
+
+### Check posteriors for some taxa with initializations near boundary
+
+Some of the initial values for the `tau_log_lambda` parameters run up against the set boundaries for this parameters. The value is set at an upper range of `4`. This parameter characterizes the across site expectation in log expected counts. We bounded this to avoid drawing prior draws that lead to `Inf` values during sampling. However, if counts vary greatly among sites, our initial values might exceed this limit leading to rejection of some or all chains. For context, this parameter represents a multiplicative difference in counts, therefore with a limit of `4`, as set, corresponds to a 55x difference in counts for a site that is one-standard deviation. I include a step to check the initialization values for better model specification in the future.
+
+```{r boundary-check}
+
+# some of the initializations and posteriors for tau_log_sigma to ensure mass is not near upper bounds
+checkList = c(
+  "CAESP5", # this runs at tau_log_sigma 4
+  "CHISP8", # 2 chains failed for initialization values > 4
+  "RHESP4", # 3 chains rejected for initialization > 4
+  "CHISP20", # not sure why this failed, read_cmstan_csv() error
+  "NEOSP37", # 7.0% divergences in this model
+  "CHASP14", # 7.0% divergences
+  "RHYNIG", # 2.0% divergences
+  "FLUSP", # 4.0% divergencs
+  "EPIPRI", # 8.0% divergences
+  "DRUCOR", # 17% divergences
+  
+)
+```
+
+
+```{r initialization checks}
+# code to check initialization values
+tau_log_lambda_inits = init_lists %>% 
+  future_map(
+    ~vapply(.x, function(x) x$tau_log_lambda, numeric(1))
+  ) %>% 
+  bind_rows(.id = 'taxaName') %>% 
+  t() %>% data.frame %>% 
+  tibble::rownames_to_column('taxaName') %>% 
+  mutate(max = pmax(X1,X2,X3,X4, na.rm = TRUE))
+hist(tau_log_lambda_inits$max)
+## based on the upper bounds of the initialization values, we set an upper bound of 4.5. 
+## posterior checks will need to be done on this variable to ensure we are not getting a lot 
+## of mass in this upper bound and also some prior sensitivity check to ensure we are not 
+## massively impacting inferences with this very large intersite-count difference prior.
+### run tests with one model to test overwrite
+# stan_data = macroTaxaStanData[["CHISP8"]]
+# # stan_data$mu_upper <- 200
+# # stan_data$sigma_upper <- 100
+# y = "CHISP8"
+# debugonce(fit_negbin_named)
+# fit_negbin_named(stan_data = stan_data, taxaName = y, rerun = TRUE, overwrite = FALSE)
+# z = CAESP5_negbin$summary()
+
+```

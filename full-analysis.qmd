@@ -105,7 +105,7 @@ mod_names = lapply(names(macroDWList_nYear_3_list), FUN = function(a) gsub("^(\\
  # z =  fit_max_model_named(df = x, mod_name = y, rerun = TRUE, overwrite = TRUE, model_types = 'evt')
 
 # set the multisession options for parallel work
-future::plan("multisession", workers = 6)
+future::plan("multisession", workers = 10)
 
 # walk through each taxa and fit multi gvt models in fishmax
 # these models are saved to the ignore/models/ folder
@@ -213,15 +213,10 @@ The x.max from the 10,000 individual simulations have a slightly larger max as e
 ## pull out the stan_data from sim and add the reference sample #
 stan_data = sim$stan_data
 stan_data$k_ref = 20L
-stan_data$mu_upper <- max(
-  1000,
-  10 * max(stan_data$x)
-)
+stan_data$mu_upper <- 200
+stan_data$sigma_upper <- 100
+stan_data$prior_only = 0
 
-stan_data$sigma_upper <- max(
-  1000,
-  10 * stats::sd(stan_data$x)
-)
 # compile stan model
 # mod = cmdstan_model(here('code/stan/neg-bin_count_pooled.stan')) #old nb model before stabilizing priors and initialization values to help sampling
 mod = cmdstan_model(here('code/stan/hierarchical_nb_max_size_stable.stan'))
@@ -258,7 +253,7 @@ site_a = sim$observations %>%
   named_group_split(event_within_site) %>% 
   map(~dplyr::select(.x, x) %>% unlist)
 
-fit = fit_max_model(site_a)
+fit = fit_max_model(site_a, refresh = 0)
 
 get_max(fit, ci = 0.95) %>% 
   bind_rows(
@@ -300,11 +295,11 @@ parameter_summary[
   knitr::kable(.)
 ```
 
-There is a bit of change, we see a `r (5.200-4.854)/4.854*100`% change from the simulation due to the partial-pooling.
+There is a bit of change, we see a `r (5.19-4.854)/4.854*100`% change from the simulation due to the partial-pooling.
 
 ```{r full-NEON-analysis, eval=FALSE, echo=TRUE}
 macroTaxaList = readRDS(here('data/derived-data/macroTaxaList.rds'))
-
+# x= macroTaxaList[["CAESP5"]]
 # get rough mean sizes quickly to set priors on upper mu bound
 means = macroTaxaList %>% 
   map(~.x %>% select(sizeClass) %>% unlist %>%  mean(., na.rm = TRUE)) %>% 
@@ -325,8 +320,8 @@ mean(sds, na.rm = TRUE);max(sds, na.rm = TRUE)
 # we set mu_upper to 200 and sigma_upper to 100
 # convert the taxa sample lists in the correct format for the negative binomial model
 macroTaxaList %>% 
-  map(~make_stanData_taxa(.x)#,
-             # .options = furrr_options(seed= 1312)
+  future_map(~make_stanData_taxa(.x),
+             .options = furrr_options(seed= 1312)
       ) %>% 
   # this is suprisingly a large file. saved to ignore/ folder.
 saveRDS(here('ignore/macroTaxaStanData.rds'))
@@ -338,50 +333,59 @@ saveRDS(here('ignore/macroTaxaStanData.rds'))
 # set a future plan for multisession fitting if one isn't already set
 if(!inherits(plan(), "multisession")){
   if(parallelly::availableCores() == 24)
-    future::plan("multisession", workers = 10)
+    future::plan("multisession", workers = 10, gc = TRUE)
   } else{
-    future::plan("multisession", workers = 6)
+    future::plan("multisession", workers = 6, gc = TRUE)
 }
 
 # compile stan model
 # mod = cmdstan_model(here('code/stan/neg-bin_count_pooled.stan'))
 # mod = cmdstan_model(here('code/stan/hierarchical_nb_max_size.stan'))
 mod = cmdstan_model(here('code/stan/hierarchical_nb_max_size_stable.stan'))
+single_mod = cmdstan_model(here('code/stan/single_nb_max_size_stable.stan'))
 
-macroTaxaStanData = readRDS(here('ignore/macroTaxaStanData.rds'))
+macroTaxaStanData = readRDS(here('ignore/macroTaxaStanData.rds')) 
+# reorder macroTaxaStanData by most rows to fewest
+macroTaxaStanData = macroTaxaStanData[order(sapply(macroTaxaStanData, function(x) x$n_obs), decreasing = TRUE)]
 taxaNames = names(macroTaxaStanData)
 
+
+## based on the upper bounds of the initialization values, we set an upper bound of 4.5. 
+## posterior checks will need to be done on this variable to ensure we are not getting a lot 
+## of mass in this upper bound and also some prior sensitivity check to ensure we are not 
+## massively impacting inferences with this very large intersite-count difference prior.
 ### run tests with one model to test overwrite
-# stan_data = macroTaxaStanData[["AMIASP"]]
-# stan_data$mu_upper <- max(
-#   1000,
-#   10 * max(stan_data$x)
-# )
-# 
-# stan_data$sigma_upper <- max(
-#   1000,
-#   10 * stats::sd(stan_data$x)
-# )
-# y = "AMIASP"
+# stan_data = macroTaxaStanData[["CHISP8"]]
+# # stan_data$mu_upper <- 200
+# # stan_data$sigma_upper <- 100
+# y = "CHISP8"
 # debugonce(fit_negbin_named)
-# fit_negbin_named(stan_data = stan_data, taxaName = y, rerun = TRUE, overwrite = TRUE)
-# z.3 = AMIASP_negbin$summary()
+# fit_negbin_named(stan_data = stan_data, taxaName = y, rerun = TRUE, overwrite = FALSE)
+# z = CAESP5_negbin$summary()
 
 # fit the models. This will overwrite existing models if overwrite = TRUE. These are saved in the ignore/ folder
 # future_walk2(
 #   macroTaxaStanData,
 #   taxaNames,
-#   ~fit_negbin_named(df = .x, taxaName = .y, rerun = TRUE, overwrite = FALSE),
-#   .options = furrr_options(seed = 1312)
+#   ~fit_negbin_named(stan_data = .x, taxaName = .y, rerun = TRUE, overwrite = FALSE),
+#   .options = furrr_options(seed = 1312, scheduling = Inf)
 #   )
-walk2(
-   macroTaxaStanData,
-   taxaNames,
-   ~fit_negbin_named(stan_data  = .x, taxaName = .y, rerun = TRUE, overwrite = FALSE)
-   )
+# walk2(
+#    macroTaxaStanData,
+#    taxaNames,
+#    ~fit_negbin_named(stan_data  = .x, taxaName = .y, rerun = TRUE, overwrite = FALSE)
+#    )
 ```
 
+
+
+
+
+
 ```{r get-nb-max}
+
+
+
 
 fit$summary(
   variables = c(
