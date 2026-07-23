@@ -384,9 +384,6 @@ taxaNames = names(macroTaxaStanData)
 
 ```{r get-nb-max}
 
-
-
-
 fit$summary(
   variables = c(
     "mu",
@@ -400,7 +397,8 @@ fit$summary(
     "max_ref_q50",
     "max_ref_q975",
     "max_ref_rep"
-  )
-)
+
+  ))
+
 
 ```
