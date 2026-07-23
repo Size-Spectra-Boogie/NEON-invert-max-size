@@ -393,7 +393,6 @@ taxaNames = names(macroTaxaStanData)
 # load in the model files lists
 nbModFiles = list.files(here('ignore/models/'), '.rds', full.names = TRUE)
 
-<<<<<<< HEAD
 # extract taxa names from model lists
 taxaNames = nbModFiles %>% 
   map(~sapply(strsplit(sapply(strsplit(.x, "/"),"[",10),"_"), "[", 1)) %>% 
@@ -449,15 +448,103 @@ macroTaxaSiteDf = macroTaxaSiteDf %>%
 
 ```
 
-Okay, so now we have all the estimated variables we might want to model, let's take a look 
+Okay, so now we have all the estimated variables we might want to model, let's take a look at some summaries of the distinct counts at different taxonomic levels.
+
+```{r taxonomic-summaries}
+classTab = macroTaxaSiteDf %>% 
+  dplyr::filter(grepl('size_mean',variable),
+                !is.na(class)) %>% 
+  dplyr::summarise(n = n(), .by = 'class')
+
+subclassTab = macroTaxaSiteDf %>% 
+  dplyr::filter(grepl('size_mean',variable),
+                !is.na(subclass)) %>% 
+  dplyr::summarise(n = n(), .by = 'subclass')
   
-```{r single example}
-x %>%   
-  dplyr::filter(order == 'Coleoptera') %>% 
+orderTab = macroTaxaSiteDf %>% 
+  dplyr::filter(grepl('size_mean',variable),
+                !is.na(order)) %>% 
+  dplyr::summarise(n = n(), .by = 'order')
+  
+familyTab = macroTaxaSiteDf %>% 
+  dplyr::filter(grepl('size_mean',variable),
+                !is.na(family)) %>% 
+  dplyr::summarise(n = n(), .by = 'family')
+
+genusTab = macroTaxaSiteDf %>% 
+  dplyr::filter(grepl('size_mean',variable),
+                !is.na(genus)) %>% 
+  dplyr::summarise(n = n(), .by = 'genus')
+
+taxonIDTab = macroTaxaSiteDf %>% 
+  dplyr::filter(grepl('size_mean', variable),
+                !is.na(acceptedTaxonID)) %>% 
+  dplyr::summarise(n = n(), .by = 'acceptedTaxonID')
+```
+
+#### Class Table
+
+```{r class-tab}
+classTab %>% 
+  knitr::kable(.)
+```
+
+#### Subclass Table
+
+```{r subclass-tab}
+subclassTab %>% 
+  knitr::kable(.)
+```
+  
+#### Order Table
+
+```{r order-tab}
+orderTab %>% 
+  knitr::kable(.)
+```
+
+#### Family Table
+
+```{r family-tab}
+familyTab %>% 
+  knitr::kable(.)
+```
+
+#### Genus Table
+
+```{r genus-tab}
+genusTab %>% 
+  knitr::kable(.)
+```
+
+#### Accepted ID Table
+
+```{r taxonID-tab}
+taxonIDTab %>% 
+  knitr::kable(.)
+
+```
+
+```{r single-taxa-ex}
+
+macroTaxaSiteDf %>% 
+  dplyr::filter(acceptedTaxonID == 'POLSP13') %>% 
   dplyr::filter(grepl('max_ref_rep', variable)) %>% 
   ggplot()+
+  stat_smooth(aes(x=lat, y = log10(dw_median)), color = 'lightgrey', alpha = 0.5, se = FALSE, method = 'lm', geom = 'line')+
+  geom_point(aes(x = lat, y = log10(dw_median)))+
+  scale_color_viridis(discrete = TRUE)+
+  theme(legend.position = 'none')
+
+```
+
+```{r single example}
+macroTaxaSiteDf %>%   
+  dplyr::filter(family == 'Chironomidae') %>% 
+  dplyr::filter(grepl('max_ref_rep', variable)) %>% 
+  ggplot()+
+    stat_smooth(aes(x=lat, y = log10(dw_median), group = genus), color = 'lightgrey', alpha = 0.5, se = FALSE, method = 'lm', geom = 'line')+
   geom_point(aes(x = lat, y = log10(dw_median), color = acceptedTaxonID))+
-  geom_smooth(aes(x=lat, y = log10(dw_median), group = family), color = 'black', se = FALSE, method = 'lm')+
   scale_color_viridis(discrete = TRUE)+
   theme(legend.position = 'none')
 ```
