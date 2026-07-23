@@ -3,8 +3,8 @@ title: "model-troubleshooting"
 format: html
 ---
 
-Introduction
-------
+## Introduction
+
 <link rel="stylesheet" type="text/css" href="http://cdn.datatables.net/1.10.5/css/jquery.dataTables.min.css">
 <script src="http://code.jquery.com/jquery-2.1.2.min.js"></script>
 <script src="http://cdn.datatables.net/1.10.5/js/jquery.dataTables.min.js"></script>
@@ -37,7 +37,7 @@ This page is for documenting the model checking procedures for the maximum size 
 
 ## Divergent transitions
 
-The original models had ~700, or about 50%, that exhibited divergent transitions after warmup. I should have realized at the outset that we are likely to have many taxa with only a single site, so the hierarchical structure of the model is obviously not appropriate. It turned out that ~400 only have a single site.
+The original models had \~700, or about 50%, that exhibited divergent transitions after warmup. I should have realized at the outset that we are likely to have many taxa with only a single site, so the hierarchical structure of the model is obviously not appropriate. It turned out that \~400 only have a single site.
 
 ```{r id-S-of-one}
 
@@ -52,7 +52,7 @@ This is likely a large part of the issue. Which became apparent with the checks 
 
 ### Check models with divergences after sampling
 
-Lots of the models exhibit divergences after warming, most often this is ~1% of transitions, other times if can be up to ~20%. Below we go through a diagnostic procedure to better characterize where these divergences occur and hopefully we can better specify/constrain the model to eliminate this issue.
+Lots of the models exhibit divergences after warming, most often this is \~1% of transitions, other times if can be up to \~20%. Below we go through a diagnostic procedure to better characterize where these divergences occur and hopefully we can better specify/constrain the model to eliminate this issue.
 
 ```{r nb-divergences}
 nbFiles = list.files(here('ignore/models/'), '.rds', full.names = TRUE)
@@ -138,8 +138,10 @@ future_walk2(
    ~fit_negbin_named(stan_data  = .x, taxaName = .y, rerun = TRUE, overwrite = TRUE),
   .options = furrr_options(seed = 1312, scheduling = Inf)
    )
-# one of the models 3 chains failed
+# one of the models 3 chains failed need to find this somehow :(
 ```
+
+A few models still have divergences. I will troubleshoot these but I wanted to work on importing and passing along initial results while I work on divergences.
 
 
 ```{r check-ints}
@@ -162,7 +164,6 @@ tau_log_lambda_inits = init_lists %>%
   mutate(max = pmax(X1,X2,X3,X4, na.rm = TRUE))
 hist(tau_log_lambda_inits$max)
 ```
-
 
 ```{r diagnostics-bad-models}
 
@@ -539,14 +540,13 @@ DRUCOR_initList = init_lists[["DRUCOR"]]
 
 ### Bad models
 
-Some of the models just have too few sites/samples to adequately and reasonably fit the model. We can prescreen these models using some minimum criteria such as # of sampling events. Below we explore the data and sampling space that we show divergences.
+Some of the models just have too few sites/samples to adequately and reasonably fit the model. We can prescreen these models using some minimum criteria such as \# of sampling events. Below we explore the data and sampling space that we show divergences.
 
 ```{r screen-bad-models}
 badTaxa = c(
   "DRUCOR",
 )
 ```
-
 
 ### Check posteriors for some taxa with initializations near boundary
 
@@ -569,7 +569,6 @@ checkList = c(
   
 )
 ```
-
 
 ```{r initialization checks}
 # code to check initialization values

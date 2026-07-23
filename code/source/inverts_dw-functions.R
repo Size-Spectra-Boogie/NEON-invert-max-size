@@ -106,3 +106,11 @@ est_dw <- function(x, fieldData){
                           formula_type == 2 ~ exp(a + b * log(sizeClass))))
   return(x)
 }
+
+est_dw_simp = function(x, a, b, formula_type){
+  ifelse(formula_type == 1, a * x^b, exp(a + b *log(x)))
+#     dplyr::mutate(dw = dplyr::case_when(formula_type == 1 ~ a * sizeClass^b,
+#                                         formula_type == 2 ~ exp(a + b * log(sizeClass))))
+}
+
+est_dw_simp = Vectorize(est_dw_simp)

@@ -299,6 +299,7 @@ There is a bit of change, we see a `r (5.19-4.854)/4.854*100`% change from the s
 
 ```{r full-NEON-analysis, eval=FALSE, echo=TRUE}
 macroTaxaList = readRDS(here('data/derived-data/macroTaxaList.rds'))
+
 # x= macroTaxaList[["CAESP5"]]
 # get rough mean sizes quickly to set priors on upper mu bound
 means = macroTaxaList %>% 
@@ -325,6 +326,12 @@ macroTaxaList %>%
       ) %>% 
   # this is suprisingly a large file. saved to ignore/ folder.
 saveRDS(here('ignore/macroTaxaStanData.rds'))
+
+# make a site index list to map back to model output
+macroTaxaList %>% 
+  future_map(~make_site_index(.x),
+              .options = furrr_options(seed= 1312)) %>% 
+  saveRDS(., here('ignore/macroTaxaSiteIndex.rds'))
 
 ```
 
@@ -383,24 +390,73 @@ taxaNames = names(macroTaxaStanData)
 
 
 ```{r get-nb-max}
+# load in the model files lists
+nbModFiles = list.files(here('ignore/models/'), '.rds', full.names = TRUE)
 
+# extract taxa names from model lists
+taxaNames = nbModFiles %>% 
+  map(~sapply(strsplit(sapply(strsplit(.x, "/"),"[",10),"_"), "[", 1)) %>% 
+  unlist
 
+# load in site index for each taxa
+macroTaxaSiteIndex = readRDS(here('ignore/macroTaxaSiteIndex.rds'))
+# set the model index order to each taxa
+macroTaxaSiteIndex = macroTaxaSiteIndex[taxaNames]
 
+## read in the taxonomy data to join with index
+macroTaxonomy = readRDS(here('data/NEON-macros-tax.rds'))
 
-fit$summary(
-  variables = c(
-    "mu",
-    "sigma",
-    "lambda",
-    "phi",
-    "size_mean",
-    "size_median",
-    "expected_n_ref",
-    "max_ref_q025",
-    "max_ref_q50",
-    "max_ref_q975",
-    "max_ref_rep"
-  )
-)
+# read in length-mass regression  
+lwCoefsDf = read.csv(here('data/macro_lw_coeffs.csv')) #%>% 
+  # add in others that don't have l-m below
 
+# add this to the macroTaxonomy to read in later.
+# debugonce(LW_coef)
+macroTaxonomy = macroTaxonomy %>% 
+  LW_coef(., lw_coef = lwCoefsDf, percent = TRUE)
+# read in and clean the site lat-long data to merge with index
+siteCoords = read.csv(here('data/site_latlong.csv')) %>% 
+  bind_rows(data.frame(
+    site = c('BLWA', 'FLNT', 'LIRO','PRLA','SUGG','BARC','PRPO','CRAM','TOOK','TOMB'),
+    lat = c(32.54153,31.18542,45.99827,47.15909,29.68778,29.67598,47.12984,46.20967,68.63069,31.85343),
+    long = c(-87.79815,-84.43740,-89.70477,-99.11388,-82.01775,-82.00841,-99.25315,-89.47369,-149.61064,-88.15887)
+  ))
+  
+# here is the function to prepare the full data frame with estimated maximum mass. This saves the table so we don't have rerun this every time. Takes 20min (too long) to run sequentially.
+if(rerun_data){
+  if(!inherits('multisession', plan())){
+    future::plan('multisession', workers = 10, gc = TRUE)
+  }
+future_pmap(
+  list(nbModFiles, taxaNames, macroTaxaSiteIndex),
+  ~extract_max(filePath = ..1, names = ..2, siteIndex = ..3)
+  ) %>%
+  bind_rows() %>% 
+  dplyr::select(-siteID) %>% 
+  dplyr::select(acceptedTaxonID, site = siteName, everything()) %>% 
+  dplyr::mutate(site = trimws(as.character(site))) %>% 
+  right_join(macroTaxonomy, ., by = 'acceptedTaxonID') %>% 
+  left_join(., siteCoords, by = 'site') %>% 
+  saveRDS(here('data/derived-data/macroTaxaSiteDf.rds'))
+} else{
+  macroTaxaSiteDf = readRDS(here('data/derived-data/macroTaxaSiteDf.rds'))
+}
+
+# use the est_dw() function to convert length estimates to mass 
+macroTaxaSiteDf = macroTaxaSiteDf %>%
+  mutate(across(c(mean, median, q5, q95), ~est_dw_simp(.x, a,b,formula_type), .names = "dw_{.col}"))
+
+```
+
+Okay, so now we have all the estimated variables we might want to model, let's take a look 
+  
+```{r single example}
+x %>%   
+  dplyr::filter(order == 'Coleoptera') %>% 
+  dplyr::filter(grepl('max_ref_rep', variable)) %>% 
+  ggplot()+
+  geom_point(aes(x = lat, y = log10(dw_median), color = acceptedTaxonID))+
+  geom_smooth(aes(x=lat, y = log10(dw_median), group = family), color = 'black', se = FALSE, method = 'lm')+
+  scale_color_viridis(discrete = TRUE)+
+  theme(legend.position = 'none')
 ```

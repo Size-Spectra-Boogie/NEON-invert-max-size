@@ -15,6 +15,7 @@ library(furrr)
 library(junkR)
 library(cmdstanr)
 library(fishmax)
+library(viridis)
 
 theme_set(theme_minimal())
 

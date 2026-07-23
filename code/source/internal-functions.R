@@ -1098,6 +1098,43 @@ check_divergences = function(filePath = NULL){
               num_diverge = num_diverge))
 }
 
+make_site_index = function(df = NULL){
+  taxaName = unique(df$acceptedTaxonID)
+  siteYearDf = df %>% 
+    named_group_split(siteID, collectYear) %>% 
+    map(~.x %>% 
+          pmap(~rep(x = ..4, times = ..6)) %>% 
+          list %>% 
+          unlist %>% 
+          as_tibble) %>% 
+    bind_rows(.id = 'id')%>% 
+    tidyr::separate_wider_delim(id, names = c('siteID','collectYear'), delim = "/", cols_remove = FALSE)
+  n_per_sample = siteYearDf %>% 
+    summarise(count = n(),.by = 'id') %>% 
+    select(count) %>% 
+    unlist %>% unname
+  start_idx = c(1,(cumsum(n_per_sample)+1)) %>% head(.,-1)
+  site_name = as.factor(siteYearDf$siteID)[start_idx]
+  site_id = as.character(as.integer(as.factor(siteYearDf$siteID))[start_idx])
+  
+  return(data.frame(
+    acceptedTaxonID = taxaName,
+    siteName = site_name,
+    siteID = site_id
+  ) %>% filter(!duplicated(.))
+  )
+}
+
+extract_max = function(filePath = NULL, names = NULL, siteIndex = NULL){
+  mod = readRDS(filePath)
+  vars = paste(c('max_ref_rep', 'size_mean','size_median'), collapse = '|')
+  fullSumm = mod$summary()
+  filteredSumm = fullSumm[grepl(vars, fullSumm$variable), c('variable','mean', 'median', 'sd', 'q5','q95')]
+  filteredSumm$acceptedTaxonID = names
+  filteredSumm$siteID = gsub("\\w+\\[(\\d{1,2})\\]", "\\1", filteredSumm$variable)
+  summDf = left_join(filteredSumm, data.frame(siteIndex), by = c('acceptedTaxonID','siteID'))
+  return(summDf)
+}
 ###### SPARED(D) CODE ########
 #'
 #'
