@@ -12,7 +12,8 @@ format: html
          } );
 </script>
 
-## Introduction
+Introduction
+-----
 
 ```{r init, echo=FALSE, warning=FALSE, message=FALSE}
 here::i_am('full-analysis.qmd') 
@@ -57,9 +58,439 @@ How many site-taxa combinations have only single year of observations?
 
 How many have 3+ years? `r site_taxa_nYear_tab %>% dplyr::filter(nYear >= 3) %>% nrow()`
 
+### Build a pooled model Negative Binomial count model and test
+
+The most appropriate approach would be to allow us to use the information across many sites when we have many observations. To do so, a hierarchical approach is necessary. Also, there is a fundamental difference between the estimand in the Extreme Value Theory (EVT) models used below and the data we have available. The EVT models are using just the maximum values observed across the sampling years to estimate the largest size -- so we are only using something like 3-15 data points. Alternatively, we can try to use all the size information to estimate the maximum body size.
+
+I put together a hierarchical model in stan that uses a negative binomial count model to parameterize the entire body size distribution and then uses posterior predictive simulations to estimate the maximum body size observed using a standardized 'effort'. This model uses partial-pooling across sites to estimate the body size distribution from a truncated normal distribution so we can use information across many sites to inform poorly sampled sites. The model estimates the expected density or counts for each site along with the mean and standard deviation of the truncated normal. The site-level mean and sd of the truncated normal is estimated with hyperpriors for the pooled mean and sd to allow weighting of sites with lots of data versus sites with few data.
+
+From here, we recognize that the upper body size is something we are unlikely to observe and is very likely dependent on the sampling effort in terms of years of sampling. So to estimate this and characterize the uncertainty, for each draw the model performs 20 posterior predictive simulations and estimates the max body size under a standard 'effort'. 
+
+Below, I test a simulated data set with the negative binomial count model against the models in `fishmax`. I deliberately choose a low value for the site with 1 sample to determine the effect of the pooling. This allows us to see that the model is performing as expected and estimating reasonable values. I also compare the maximum observed body size from sampling 100,000 individuals from the distributions to see expected values with extensive sampling of a distribution
+
+<details>
+
+```{r simulate-multisite data, echo=TRUE, eval = TRUE}
+## set the simulation parameters
+simPars = data.frame(site = c('a','b','c','d','e'),
+                     mu = c(10,8,7.8, 3, 9.5),
+                     sigma = c(1.0,1.2,1.5,0.5,1.8),
+                     k = c(4,3,3,1,2),
+                     stringsAsFactors = FALSE)
+                     
+simPars$n = list(c(100,150,200,110),
+                           c(100,200,210),
+                           c(500,600,700),
+                           c(50),
+                           c(200,220))
+
+# show histograms of body size distributions for 10,000 individuals
+simList = mapply(FUN = truncnorm::rtruncnorm,mean = c(10,8,7.8, 3, 9.5),sd = c(1.0,1.2,1.5,0.5,1.8),
+                 MoreArgs = list(n = 1e5,
+                                 a = 0))
+# plot the distributions
+par(mfrow = c(2,3))
+apply(simList,2,hist)
+
+## simulate the sampling process and spit out in stan_data format
+sim = simulation(simPars = simPars, seed = 1312)
+
+# aggregate to test the simulated observations
+# add the max values observed from 10,000 inds for a sanity check
+
+simAgg = do.call(
+  data.frame,
+  aggregate(
+    x ~ site,
+    data = sim$observations,
+    FUN = function(z) {
+      c(
+        mean = mean(z),
+        sd = sd(z),
+        min = min(z),
+        max = max(z)
+        )
+    }
+    )
+  ) %>% 
+  bind_cols(
+    data.frame(
+    x.mean.1e5 = apply(simList,2,mean),
+    x.sd.1e5 = apply(simList,2,sd),
+    x.max.1e5 = apply(simList,2,max)
+    )
+  ) 
+
+simAgg %>% 
+  knitr::kable(., caption = "Table 1. Comparisons of distribution moments from simulated sampling data and 1e5 draws from truncated normal.")
+
+```
+
+The `x.max` from the 100,000 individual simulations have a slightly larger max as expected but everything is pretty close, as expected.
+
+</details>
+
+```{r test-hier_nb, warning=FALSE, message=FALSE, eval = TRUE, echo=TRUE}
+
+## pull out the stan_data from sim and add the reference sample #
+stan_data = sim$stan_data
+stan_data$k_ref = 20L
+stan_data$mu_upper <- 200
+stan_data$sigma_upper <- 100
+stan_data$prior_only = 0
+
+# compile stan model
+# mod = cmdstan_model(here('code/stan/neg-bin_count_pooled.stan')) #old nb model before stabilizing priors and initialization values to help sampling
+mod = cmdstan_model(here('code/stan/hierarchical_nb_max_size_stable.stan'))
+
+init_list= make_init_list_stable(stan_data, chains = 4, seed = 1312)
+# fit the model
+negbin_fit = mod$sample(
+    data = stan_data,
+    seed = 1312,
+    chains = 4,
+    parallel_chains = 4,
+    init = init_list,
+    iter_warmup = 1000,
+    iter_sampling = 1000,
+    adapt_delta = 0.95,
+    max_treedepth = 12,
+    refresh = 0
+  )
+
+parameter_summary <- negbin_fit$summary()
+
+vars = 'max_ref_rep'
+slimSumm =  parameter_summary[grepl(vars, parameter_summary$variable),c('mean','sd','q5','q95')] %>% 
+  setNames(., nm = c('maxL_mean','maxL_sd','maxL_q5','maxL_q95'))
+
+bind_cols(sim$site_truth[,c(1:2,5:6)], slimSumm) %>% 
+  bind_cols(
+    data.frame(
+    maxL_1e5 = apply(simList,2,max)
+    )
+  ) %>% 
+  knitr::kable(., caption = "Table 2. Negative binomial count model estimates of maximum body size compared to simulation with 1e5. 'site' and 'site_id' represent the site identifiers, 'k_observed' is the number of samples, 'mean_n_observed' is the average individuals in each samples, 'maxL_*' represents the modeled estimates of the maximum body size, and 'maxL_1e5' is the maximum body size observed in 1e5 simulations from truncated normal distribution.")
+```
+
+We see in the modeled estimates compared to the simulated observation, most estimates are lower because we sampled fewer individuals. One exception is site 'd' which has been 'pulled up' from the partial pooling as we intended, we see a `r (5.19-4.854)/4.854*100`% change from the simulation due to the partial-pooling. 
+
+We can check the $L_{max}$ estimates from the EVT models and compare using one site. Let's check this for one site. I will not choose the site that we purposefully did a deviation.
+
+```{r test-gvt, eval = TRUE, echo = TRUE}
+
+# select just one site
+site_a = sim$observations %>% 
+  dplyr::filter(site == 'a') %>% 
+  named_group_split(event_within_site) %>% 
+  map(~dplyr::select(.x, x) %>% unlist)
+
+fit = fit_max_model(site_a, refresh = 0)
+
+get_max(fit, ci = 0.95) %>% 
+  bind_rows(
+    parameter_summary[which(parameter_summary$variable == 'max_ref_rep[1]'),
+                  c('median', 'q5','q95')] %>% 
+    dplyr::mutate(model = 'negbin') %>% 
+    dplyr::select(model, `max_fit.50%` = median, `max_lwr.2.5%` = q5, `max_upr.97.5%` = q95)
+  ) %>% 
+  bind_rows(
+    data.frame(
+      model = 'sim',
+      'max_fit.50%' = unlist(simAgg[1, c('x.max')]),
+      'max_lwr.2.5%' = NA,
+      'max_upr.97.5%' = NA,
+      check.names = FALSE)
+    ) %>% 
+  knitr::kable(.)
+
+```
+
+These simulations and model comparisons show that we do a pretty good job of capturing the signal in this site and it doesn't matter much which model is used for this site that is sampled fairly well. We can't fit a model with `fishmax` to site 'd' because we only have a single sample, but we had no problem with the hierarchical model to get an estimate for this site.
+
+## Prepare NEON data for analysis
+
+```{r full-NEON-analysis, eval=FALSE, echo=TRUE}
+# list organized by each taxa group, acceptedTaxonID
+macroTaxaList = readRDS(here('data/derived-data/macroTaxaList.rds'))
+
+# get rough mean sizes quickly to set priors on upper mu bound
+means = macroTaxaList %>% 
+  map(~.x %>% select(sizeClass) %>% unlist %>%  mean(., na.rm = TRUE)) %>% 
+  bind_rows %>% unlist
+hist(log10(means))
+mean(log(means));mean(means);max(means)
+# [1] 1.323187
+# [1] 5.177346
+# [1] 115
+sds = macroTaxaList %>% 
+  map(~.x %>% select(sizeClass) %>% unlist %>%  sd(., na.rm = TRUE)) %>% 
+  bind_rows %>% unlist
+hist(log10(sds))
+mean(sds, na.rm = TRUE);max(sds, na.rm = TRUE)
+#[1] 2.194067
+#[1] 26.71454
+# we have some means above 100
+# we set mu_upper to 400 and sigma_upper to 200
+
+# convert the taxa sample lists in the correct format for the negative binomial model
+macroTaxaList %>% 
+  future_map(~make_stanData_taxa(.x),
+             .options = furrr_options(seed= 1312)
+      ) %>% 
+  # this is suprisingly a large file. saved to ignore/ folder.
+saveRDS(here('ignore/macroTaxaStanData.rds'))
+
+# make a site index list to map back to model output to sites
+macroTaxaList %>% 
+  future_map(~make_site_index(.x),
+              .options = furrr_options(seed= 1312)) %>% 
+  saveRDS(., here('ignore/macroTaxaSiteIndex.rds'))
+
+```
+
+```{r run-negbin-taxa, echo=TRUE, eval=FALSE}
+
+# set a future plan for multisession fitting if one isn't already set
+if(!inherits(plan(), "multisession")){
+  if(parallelly::availableCores() == 24)
+    future::plan("multisession", workers = 10, gc = TRUE)
+  } else{
+    future::plan("multisession", workers = 6, gc = TRUE)
+}
+
+# compile stan models
+## model for multi-site taxa
+mod = cmdstan_model(here('code/stan/hierarchical_nb_max_size_stable.stan'))
+## model for taxa with only observations at a single site
+single_mod = cmdstan_model(here('code/stan/single_nb_max_size_stable.stan'))
+
+## load in stan data list
+macroTaxaStanData = readRDS(here('ignore/macroTaxaStanData.rds')) 
+
+# reorder macroTaxaStanData by most rows to fewest for distributing future work
+macroTaxaStanData = macroTaxaStanData[order(sapply(macroTaxaStanData, function(x) x$n_obs), decreasing = TRUE)]
+## set the taxa names for naming models
+taxaNames = names(macroTaxaStanData)
+
+## based on the upper bounds of the initialization values, we set an upper bound of 4.5 for the cross site count variation. This corresponds to ~55x variation in counts among sites at 1SD.
+## posterior checks will need to be done on this variable to ensure we are not getting a lot 
+## of mass in this upper bound and also some prior sensitivity check to ensure we are not 
+## massively impacting inferences with this very large intersite-count difference prior.
+### run tests with one model to test overwrite
+# stan_data = macroTaxaStanData[["CHISP8"]]
+# y = "CHISP8"
+# debugonce(fit_negbin_named)
+# fit_negbin_named(stan_data = stan_data, taxaName = y, rerun = TRUE, overwrite = FALSE)
+# z = CAESP5_negbin$summary()
+
+# fit the models. This will overwrite existing models if overwrite = TRUE. These are saved in the ignore/ folder
+# future_walk2(
+#   macroTaxaStanData,
+#   taxaNames,
+#   ~fit_negbin_named(stan_data = .x, taxaName = .y, rerun = TRUE, overwrite = FALSE),
+#   .options = furrr_options(seed = 1312, scheduling = Inf)
+#   )
+## a non-future version for debugging model fits
+# walk2(
+#    macroTaxaStanData,
+#    taxaNames,
+#    ~fit_negbin_named(stan_data  = .x, taxaName = .y, rerun = TRUE, overwrite = FALSE)
+#    )
+```
+
+#### Note of caution
+
+Some of the checking of model behavior is outlined in the `model-troubleshooting` file to keep this clean. The majority of this was dealing with divergences when trying to fit a hiearchical model to single-site data (duh!), but a few others need to be checked to ensure good inferences. These results below are preliminary and once updated this warning will be removed.
+
+### Checking model results
+
+```{r prep-data-extract, echo = TRUE, eval = FALSE}
+# load in the model files lists
+nbModFiles = list.files(here('ignore/models/'), '.rds', full.names = TRUE)
+
+# extract taxa names from model lists
+taxaNames = nbModFiles %>% 
+  map(~sapply(strsplit(sapply(strsplit(.x, "/"),"[",10),"_"), "[", 1)) %>% 
+  unlist
+
+# load in site index for each taxa
+macroTaxaSiteIndex = readRDS(here('ignore/macroTaxaSiteIndex.rds'))
+# set the model index order to each taxa
+macroTaxaSiteIndex = macroTaxaSiteIndex[taxaNames]
+
+## read in the taxonomy data to join with index
+macroTaxonomy = readRDS(here('data/NEON-macros-tax.rds'))
+
+# read in length-mass regression  
+lwCoefsDf = read.csv(here('data/macro_lw_coeffs.csv')) #%>% 
+  # add in others that don't have l-m below
+
+# add this to the macroTaxonomy to read in later.
+# debugonce(LW_coef)
+macroTaxonomy = macroTaxonomy %>% 
+  LW_coef(., lw_coef = lwCoefsDf, percent = TRUE)
+# read in and clean the site lat-long data to merge with index
+siteCoords = read.csv(here('data/site_latlong.csv')) %>% 
+  bind_rows(data.frame(
+    site = c('BLWA', 'FLNT', 'LIRO','PRLA','SUGG','BARC','PRPO','CRAM','TOOK','TOMB'),
+    lat = c(32.54153,31.18542,45.99827,47.15909,29.68778,29.67598,47.12984,46.20967,68.63069,31.85343),
+    long = c(-87.79815,-84.43740,-89.70477,-99.11388,-82.01775,-82.00841,-99.25315,-89.47369,-149.61064,-88.15887)
+  ))
+  
+# here is the function to prepare the full data frame with estimated maximum mass. This saves the table so we don't have rerun this every time. Takes 20min (too long) to run sequentially.
+if(rerun_data){
+  if(!inherits('multisession', plan())){
+    future::plan('multisession', workers = 10, gc = TRUE)
+  }
+future_pmap(
+  list(nbModFiles, taxaNames, macroTaxaSiteIndex),
+  ~extract_max(filePath = ..1, names = ..2, siteIndex = ..3)
+  ) %>%
+  bind_rows() %>% 
+  dplyr::select(-siteID) %>% 
+  dplyr::select(acceptedTaxonID, site = siteName, everything()) %>% 
+  dplyr::mutate(site = trimws(as.character(site))) %>% 
+  right_join(macroTaxonomy, ., by = 'acceptedTaxonID') %>% 
+  left_join(., siteCoords, by = 'site') %>% 
+  saveRDS(here('data/derived-data/macroTaxaSiteDf.rds'))
+} else{
+  macroTaxaSiteDf = readRDS(here('data/derived-data/macroTaxaSiteDf.rds'))
+}
+
+```
+
+We can extract all the model estimates and merge with site and taxonomy data to look at patterns.
+
+```{r get-nb-data, echo=TRUE, eval= TRUE}
+macroTaxaSiteDf = readRDS(here('data/derived-data/macroTaxaSiteDf.rds'))
+
+# use the est_dw() function to convert length estimates to mass 
+macroTaxaSiteDf = macroTaxaSiteDf %>%
+  mutate(across(c(mean, median, sd, q5, q95), ~est_dw_simp(.x, a,b,formula_type), .names = "dw_{.col}"))
+```
+
+Now we have all the estimated variables we might want to model and we have converted from length to mass, let's take a look at some summaries of the distinct counts at different taxonomic levels.
+
+```{r taxonomic-summaries, echo=TRUE, eval=TRUE}
+classTab = macroTaxaSiteDf %>% 
+  dplyr::filter(grepl('size_mean',variable),
+                !is.na(class)) %>% 
+  dplyr::summarise(n = n(), .by = 'class')
+
+subclassTab = macroTaxaSiteDf %>% 
+  dplyr::filter(grepl('size_mean',variable),
+                !is.na(subclass)) %>% 
+  dplyr::summarise(n = n(), .by = 'subclass')
+  
+orderTab = macroTaxaSiteDf %>% 
+  dplyr::filter(grepl('size_mean',variable),
+                !is.na(order)) %>% 
+  dplyr::summarise(n = n(), .by = 'order')
+  
+familyTab = macroTaxaSiteDf %>% 
+  dplyr::filter(grepl('size_mean',variable),
+                !is.na(family)) %>% 
+  dplyr::summarise(n = n(), .by = 'family')
+
+genusTab = macroTaxaSiteDf %>% 
+  dplyr::filter(grepl('size_mean',variable),
+                !is.na(genus)) %>% 
+  dplyr::summarise(n = n(), .by = 'genus')
+
+taxonIDTab = macroTaxaSiteDf %>% 
+  dplyr::filter(grepl('size_mean', variable),
+                !is.na(acceptedTaxonID)) %>% 
+  dplyr::summarise(n = n(), .by = 'acceptedTaxonID')
+```
+
+#### Class Table
+
+```{r class-tab, eval=TRUE, echo=FALSE}
+classTab %>% 
+  knitr::kable(.,format = "html",
+             table.attr = "class='dtable'")
+```
+
+#### Subclass Table
+
+```{r subclass-tab, eval=TRUE, echo=FALSE}
+subclassTab %>% 
+  knitr::kable(.,format = "html",
+             table.attr = "class='dtable'")
+```
+  
+#### Order Table
+
+```{r order-tab, eval=TRUE, echo=FALSE}
+orderTab %>% 
+  knitr::kable(.,format = "html",
+             table.attr = "class='dtable'")
+```
+
+#### Family Table
+
+```{r family-tab, eval=TRUE, echo=FALSE}
+familyTab %>% 
+  knitr::kable(.,format = "html",
+             table.attr = "class='dtable'")
+```
+
+#### Genus Table
+
+```{r genus-tab, eval=TRUE, echo=FALSE}
+genusTab %>% 
+  knitr::kable(.,format = "html",
+             table.attr = "class='dtable'")
+```
+
+#### Accepted ID Table
+
+```{r taxonID-tab, eval=TRUE, echo=FALSE}
+taxonIDTab %>% 
+  knitr::kable(.,format = "html",
+             table.attr = "class='dtable'")
+
+```
+
+### Plots of some examples
+
+An example with the chironomid in the genus `Polypedilum` (acceptedTaxonID = POLSP13).
+
+```{r single-taxa-ex, eval=TRUE, echo=FALSE}
+
+macroTaxaSiteDf %>% 
+  dplyr::filter(acceptedTaxonID == 'POLSP13') %>% 
+  dplyr::filter(grepl('max_ref_rep', variable)) %>% 
+  ggplot()+
+  stat_smooth(aes(x=lat, y = (dw_mean)), color = 'black', alpha = 0.5, se = FALSE, method = 'lm', geom = 'line')+
+  geom_errorbar(aes(x = lat, ymin =(dw_q5), ymax = (dw_q95)))+
+  geom_point(aes(x = lat, y = (dw_mean), fill = site), shape = 21, size = 1)+
+  scale_fill_viridis(discrete = TRUE)+
+  coord_transform(y = 'log10')+
+  theme(legend.position = 'none')
+
+```
+
+Family Baetidae
+
+```{r single-family-example, eval=TRUE, echo=FALSE}
+macroTaxaSiteDf %>%   
+  dplyr::filter(family == 'Baetidae') %>% 
+  dplyr::filter(grepl('max_ref_rep', variable)) %>% 
+  ggplot()+
+    stat_smooth(aes(x=lat, y = (dw_mean), group = genus), color = 'black', alpha = 0.5, se = FALSE, method = 'lm', geom = 'line')+
+  stat_smooth(aes(x = lat, y = dw_mean), color = 'blue', se = FALSE, method = 'lm')+
+  geom_errorbar(aes(x = lat, ymin =(dw_q5), ymax = (dw_q95)))+
+  geom_point(aes(x = lat, y = (dw_mean), fill = site), shape = 21, size = 1)+
+  scale_fill_viridis(discrete = TRUE)+
+  coord_transform(y = 'log10')+
+  theme(legend.position = 'none')
+```
+
 ## Fitting max length models
 
-For the site-taxa combinations with 3+ years of observations we will use the `fishmax` package to estimate body size. For the other groups, we will want to devise another approach to get estimates.
+For the site-taxa combinations with 3+ years of observations we can use the `fishmax` package to estimate body size. For the other groups, we will want to devise another approach to get estimates.
 
 ```{r subset-3+-years, echo=TRUE, eval=FALSE}
 #### This subsets samples to those with 3+ years and creates a list for 
@@ -136,415 +567,4 @@ modPaths = list.files(here('ignore/models/'), pattern ='.rds', full.names = TRUE
 ## run all the models and save to a file for later
 modPaths %>% furrr::future_map(get_max_wide) %>% bind_rows() %>% saveRDS(., here('data/max_size.rds'))
 
-```
-
-### Build a pooled model Negative Binomial count model and test
-
-As we mentioned above, we can consider using a hierarchical approach to this procedure. Also, there is a fundamental difference between the estimand in the above Extreme Value Theory (EVT) models and the data we are passing to the function. The EVT models are using just the maximum values observed across the sampling years to estimate the largest size -- so we are only using something like 3-15 data points. Alternatively, we can try to use all the size information to estimate the maximum body size.
-
-I put together a hierarchical model in stan that uses a negative binomial count model to parameterize the entire body size distribution and then uses Posterior Predictive Simulations to estimate the maximum body size observed using a standardized 'effort'. This model uses partial-pooling across sites to estimate the body size distribution, so we can use information across many sites to inform poorly sampled sites.
-
-Below, we test this model against the models in `fishmax`. I deliberately choose a low value for the site with 1 sample to determine the effect of the pooling.
-
-<details>
-
-```{r simulate-multisite data, echo=TRUE}
-## set the simulation parameters
-simPars = data.frame(site = c('a','b','c','d','e'),
-                     mu = c(10,8,7.8, 3, 9.5),
-                     sigma = c(1.0,1.2,1.5,0.5,1.8),
-                     k = c(4,3,3,1,2),
-                     stringsAsFactors = FALSE)
-                     
-simPars$n = list(c(100,150,200,110),
-                           c(100,200,210),
-                           c(500,600,700),
-                           c(50),
-                           c(200,220))
-
-# show histograms of body size distributions for 10,000 individuals
-simList = mapply(FUN = truncnorm::rtruncnorm,mean = c(10,8,7.8, 3, 9.5),sd = c(1.0,1.2,1.5,0.5,1.8),
-                 MoreArgs = list(n = 1e4,
-                                 a = 0))
-# plot the distributions
-par(mfrow = c(2,3))
-apply(simList,2,hist)
-
-## simulate the sampling process and spit out in stan_data format
-sim = simulation(simPars = simPars, seed = 1312)
-
-# aggregate to test the simulated observations
-# add the max values observed from 10,000 inds for a sanity check
-
-simAgg = do.call(
-  data.frame,
-  aggregate(
-    x ~ site,
-    data = sim$observations,
-    FUN = function(z) {
-      c(
-        mean = mean(z),
-        sd = sd(z),
-        min = min(z),
-        max = max(z)
-        )
-    }
-    )
-  ) %>% 
-  bind_cols(
-    data.frame(
-    x.mean.1e4 = apply(simList,2,mean),
-    x.sd.1e4 = apply(simList,2,sd),
-    x.max.1e4 = apply(simList,2,max)
-    )
-  ) 
-
-simAgg %>% 
-  knitr::kable(.)
-
-```
-
-The x.max from the 10,000 individual simulations have a slightly larger max as expected but everything is pretty close, as expected.
-
-</details>
-
-```{r test-hier_nb, warning=FALSE, message=FALSE}
-
-## pull out the stan_data from sim and add the reference sample #
-stan_data = sim$stan_data
-stan_data$k_ref = 20L
-stan_data$mu_upper <- 200
-stan_data$sigma_upper <- 100
-stan_data$prior_only = 0
-
-# compile stan model
-# mod = cmdstan_model(here('code/stan/neg-bin_count_pooled.stan')) #old nb model before stabilizing priors and initialization values to help sampling
-mod = cmdstan_model(here('code/stan/hierarchical_nb_max_size_stable.stan'))
-
-init_list= make_init_list_stable(stan_data, chains = 4, seed = 1312)
-# fit the model
-negbin_fit = mod$sample(
-    data = stan_data,
-    seed = 1312,
-    chains = 4,
-    parallel_chains = 4,
-    init = init_list,
-    iter_warmup = 1000,
-    iter_sampling = 1000,
-    adapt_delta = 0.95,
-    max_treedepth = 12,
-    refresh = 0
-  )
-
-parameter_summary <- negbin_fit$summary()
-
-# parameter_summary
-# sim$site_truth
-
-```
-
-We can check the $L_{max}$ estimates from all the models and compare using one site. Let's check this for one site. I will not choose the site that we purposefully did a deviation.
-
-```{r test-gvt, eval = TRUE, echo = TRUE}
-
-# select just one site
-site_a = sim$observations %>% 
-  dplyr::filter(site == 'a') %>% 
-  named_group_split(event_within_site) %>% 
-  map(~dplyr::select(.x, x) %>% unlist)
-
-fit = fit_max_model(site_a, refresh = 0)
-
-get_max(fit, ci = 0.95) %>% 
-  bind_rows(
-    parameter_summary[which(parameter_summary$variable == 'max_ref_rep[1]'),
-                  c('median', 'q5','q95')] %>% 
-    dplyr::mutate(model = 'negbin') %>% 
-    dplyr::select(model, `max_fit.50%` = median, `max_lwr.2.5%` = q5, `max_upr.97.5%` = q95)
-  ) %>% 
-  bind_rows(
-    data.frame(
-      model = 'sim',
-      'max_fit.50%' = unlist(simAgg[1, c('x.max')]),
-      'max_lwr.2.5%' = NA,
-      'max_upr.97.5%' = NA,
-      check.names = FALSE)
-    ) %>% 
-  knitr::kable(.)
-
-```
-
-These simulations and model comparisons show that we do a pretty good job of capturing the signal in this site. We can't fit a model with `fishmax` because we only have a single sample, but let's check on the hierarchical model which can use only a single year.
-
-```{r shrinkage-check}
-# select just one site
-parameter_summary[
-  which(parameter_summary$variable == 'max_ref_rep[4]'),
-  c('median', 'q5','q95')
-  ] %>% 
-  dplyr::mutate(model = 'negbin') %>% 
-  dplyr::select(model, `max_fit.50%` = median, `max_lwr.2.5%` = q5, `max_upr.97.5%` = q95) %>% 
-  bind_rows(
-    data.frame(
-      model = 'sim',
-      'max_fit.50%' = unlist(simAgg[4, c('x.max')]),
-      'max_lwr.2.5%' = NA,
-      'max_upr.97.5%' = NA,
-      check.names = FALSE)
-    ) %>% 
-  knitr::kable(.)
-```
-
-There is a bit of change, we see a `r (5.19-4.854)/4.854*100`% change from the simulation due to the partial-pooling.
-
-```{r full-NEON-analysis, eval=FALSE, echo=TRUE}
-macroTaxaList = readRDS(here('data/derived-data/macroTaxaList.rds'))
-
-# x= macroTaxaList[["CAESP5"]]
-# get rough mean sizes quickly to set priors on upper mu bound
-means = macroTaxaList %>% 
-  map(~.x %>% select(sizeClass) %>% unlist %>%  mean(., na.rm = TRUE)) %>% 
-  bind_rows %>% unlist
-hist(log10(means))
-mean(log(means));mean(means);max(means)
-# [1] 1.323187
-# [1] 5.177346
-# [1] 115
-sds = macroTaxaList %>% 
-  map(~.x %>% select(sizeClass) %>% unlist %>%  sd(., na.rm = TRUE)) %>% 
-  bind_rows %>% unlist
-hist(log10(sds))
-mean(sds, na.rm = TRUE);max(sds, na.rm = TRUE)
-#[1] 2.194067
-#[1] 26.71454
-# we have some means above 100
-# we set mu_upper to 200 and sigma_upper to 100
-# convert the taxa sample lists in the correct format for the negative binomial model
-macroTaxaList %>% 
-  future_map(~make_stanData_taxa(.x),
-             .options = furrr_options(seed= 1312)
-      ) %>% 
-  # this is suprisingly a large file. saved to ignore/ folder.
-saveRDS(here('ignore/macroTaxaStanData.rds'))
-
-# make a site index list to map back to model output
-macroTaxaList %>% 
-  future_map(~make_site_index(.x),
-              .options = furrr_options(seed= 1312)) %>% 
-  saveRDS(., here('ignore/macroTaxaSiteIndex.rds'))
-
-```
-
-```{r run-negbin-taxa}
-
-# set a future plan for multisession fitting if one isn't already set
-if(!inherits(plan(), "multisession")){
-  if(parallelly::availableCores() == 24)
-    future::plan("multisession", workers = 10, gc = TRUE)
-  } else{
-    future::plan("multisession", workers = 6, gc = TRUE)
-}
-
-# compile stan model
-# mod = cmdstan_model(here('code/stan/neg-bin_count_pooled.stan'))
-# mod = cmdstan_model(here('code/stan/hierarchical_nb_max_size.stan'))
-mod = cmdstan_model(here('code/stan/hierarchical_nb_max_size_stable.stan'))
-single_mod = cmdstan_model(here('code/stan/single_nb_max_size_stable.stan'))
-
-macroTaxaStanData = readRDS(here('ignore/macroTaxaStanData.rds')) 
-# reorder macroTaxaStanData by most rows to fewest
-macroTaxaStanData = macroTaxaStanData[order(sapply(macroTaxaStanData, function(x) x$n_obs), decreasing = TRUE)]
-taxaNames = names(macroTaxaStanData)
-
-
-## based on the upper bounds of the initialization values, we set an upper bound of 4.5. 
-## posterior checks will need to be done on this variable to ensure we are not getting a lot 
-## of mass in this upper bound and also some prior sensitivity check to ensure we are not 
-## massively impacting inferences with this very large intersite-count difference prior.
-### run tests with one model to test overwrite
-# stan_data = macroTaxaStanData[["CHISP8"]]
-# # stan_data$mu_upper <- 200
-# # stan_data$sigma_upper <- 100
-# y = "CHISP8"
-# debugonce(fit_negbin_named)
-# fit_negbin_named(stan_data = stan_data, taxaName = y, rerun = TRUE, overwrite = FALSE)
-# z = CAESP5_negbin$summary()
-
-# fit the models. This will overwrite existing models if overwrite = TRUE. These are saved in the ignore/ folder
-# future_walk2(
-#   macroTaxaStanData,
-#   taxaNames,
-#   ~fit_negbin_named(stan_data = .x, taxaName = .y, rerun = TRUE, overwrite = FALSE),
-#   .options = furrr_options(seed = 1312, scheduling = Inf)
-#   )
-# walk2(
-#    macroTaxaStanData,
-#    taxaNames,
-#    ~fit_negbin_named(stan_data  = .x, taxaName = .y, rerun = TRUE, overwrite = FALSE)
-#    )
-```
-
-
-
-
-
-
-```{r get-nb-max}
-# load in the model files lists
-nbModFiles = list.files(here('ignore/models/'), '.rds', full.names = TRUE)
-
-# extract taxa names from model lists
-taxaNames = nbModFiles %>% 
-  map(~sapply(strsplit(sapply(strsplit(.x, "/"),"[",10),"_"), "[", 1)) %>% 
-  unlist
-
-# load in site index for each taxa
-macroTaxaSiteIndex = readRDS(here('ignore/macroTaxaSiteIndex.rds'))
-# set the model index order to each taxa
-macroTaxaSiteIndex = macroTaxaSiteIndex[taxaNames]
-
-## read in the taxonomy data to join with index
-macroTaxonomy = readRDS(here('data/NEON-macros-tax.rds'))
-
-# read in length-mass regression  
-lwCoefsDf = read.csv(here('data/macro_lw_coeffs.csv')) #%>% 
-  # add in others that don't have l-m below
-
-# add this to the macroTaxonomy to read in later.
-# debugonce(LW_coef)
-macroTaxonomy = macroTaxonomy %>% 
-  LW_coef(., lw_coef = lwCoefsDf, percent = TRUE)
-# read in and clean the site lat-long data to merge with index
-siteCoords = read.csv(here('data/site_latlong.csv')) %>% 
-  bind_rows(data.frame(
-    site = c('BLWA', 'FLNT', 'LIRO','PRLA','SUGG','BARC','PRPO','CRAM','TOOK','TOMB'),
-    lat = c(32.54153,31.18542,45.99827,47.15909,29.68778,29.67598,47.12984,46.20967,68.63069,31.85343),
-    long = c(-87.79815,-84.43740,-89.70477,-99.11388,-82.01775,-82.00841,-99.25315,-89.47369,-149.61064,-88.15887)
-  ))
-  
-# here is the function to prepare the full data frame with estimated maximum mass. This saves the table so we don't have rerun this every time. Takes 20min (too long) to run sequentially.
-if(rerun_data){
-  if(!inherits('multisession', plan())){
-    future::plan('multisession', workers = 10, gc = TRUE)
-  }
-future_pmap(
-  list(nbModFiles, taxaNames, macroTaxaSiteIndex),
-  ~extract_max(filePath = ..1, names = ..2, siteIndex = ..3)
-  ) %>%
-  bind_rows() %>% 
-  dplyr::select(-siteID) %>% 
-  dplyr::select(acceptedTaxonID, site = siteName, everything()) %>% 
-  dplyr::mutate(site = trimws(as.character(site))) %>% 
-  right_join(macroTaxonomy, ., by = 'acceptedTaxonID') %>% 
-  left_join(., siteCoords, by = 'site') %>% 
-  saveRDS(here('data/derived-data/macroTaxaSiteDf.rds'))
-} else{
-  macroTaxaSiteDf = readRDS(here('data/derived-data/macroTaxaSiteDf.rds'))
-}
-
-# use the est_dw() function to convert length estimates to mass 
-macroTaxaSiteDf = macroTaxaSiteDf %>%
-  mutate(across(c(mean, median, q5, q95), ~est_dw_simp(.x, a,b,formula_type), .names = "dw_{.col}"))
-
-```
-
-Okay, so now we have all the estimated variables we might want to model, let's take a look at some summaries of the distinct counts at different taxonomic levels.
-
-```{r taxonomic-summaries}
-classTab = macroTaxaSiteDf %>% 
-  dplyr::filter(grepl('size_mean',variable),
-                !is.na(class)) %>% 
-  dplyr::summarise(n = n(), .by = 'class')
-
-subclassTab = macroTaxaSiteDf %>% 
-  dplyr::filter(grepl('size_mean',variable),
-                !is.na(subclass)) %>% 
-  dplyr::summarise(n = n(), .by = 'subclass')
-  
-orderTab = macroTaxaSiteDf %>% 
-  dplyr::filter(grepl('size_mean',variable),
-                !is.na(order)) %>% 
-  dplyr::summarise(n = n(), .by = 'order')
-  
-familyTab = macroTaxaSiteDf %>% 
-  dplyr::filter(grepl('size_mean',variable),
-                !is.na(family)) %>% 
-  dplyr::summarise(n = n(), .by = 'family')
-
-genusTab = macroTaxaSiteDf %>% 
-  dplyr::filter(grepl('size_mean',variable),
-                !is.na(genus)) %>% 
-  dplyr::summarise(n = n(), .by = 'genus')
-
-taxonIDTab = macroTaxaSiteDf %>% 
-  dplyr::filter(grepl('size_mean', variable),
-                !is.na(acceptedTaxonID)) %>% 
-  dplyr::summarise(n = n(), .by = 'acceptedTaxonID')
-```
-
-#### Class Table
-
-```{r class-tab}
-classTab %>% 
-  knitr::kable(.)
-```
-
-#### Subclass Table
-
-```{r subclass-tab}
-subclassTab %>% 
-  knitr::kable(.)
-```
-  
-#### Order Table
-
-```{r order-tab}
-orderTab %>% 
-  knitr::kable(.)
-```
-
-#### Family Table
-
-```{r family-tab}
-familyTab %>% 
-  knitr::kable(.)
-```
-
-#### Genus Table
-
-```{r genus-tab}
-genusTab %>% 
-  knitr::kable(.)
-```
-
-#### Accepted ID Table
-
-```{r taxonID-tab}
-taxonIDTab %>% 
-  knitr::kable(.)
-
-```
-
-```{r single-taxa-ex}
-
-macroTaxaSiteDf %>% 
-  dplyr::filter(acceptedTaxonID == 'POLSP13') %>% 
-  dplyr::filter(grepl('max_ref_rep', variable)) %>% 
-  ggplot()+
-  stat_smooth(aes(x=lat, y = log10(dw_median)), color = 'lightgrey', alpha = 0.5, se = FALSE, method = 'lm', geom = 'line')+
-  geom_point(aes(x = lat, y = log10(dw_median)))+
-  scale_color_viridis(discrete = TRUE)+
-  theme(legend.position = 'none')
-
-```
-
-```{r single example}
-macroTaxaSiteDf %>%   
-  dplyr::filter(family == 'Chironomidae') %>% 
-  dplyr::filter(grepl('max_ref_rep', variable)) %>% 
-  ggplot()+
-    stat_smooth(aes(x=lat, y = log10(dw_median), group = genus), color = 'lightgrey', alpha = 0.5, se = FALSE, method = 'lm', geom = 'line')+
-  geom_point(aes(x = lat, y = log10(dw_median), color = acceptedTaxonID))+
-  scale_color_viridis(discrete = TRUE)+
-  theme(legend.position = 'none')
 ```
