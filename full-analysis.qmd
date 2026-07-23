@@ -393,6 +393,7 @@ taxaNames = names(macroTaxaStanData)
 # load in the model files lists
 nbModFiles = list.files(here('ignore/models/'), '.rds', full.names = TRUE)
 
+<<<<<<< HEAD
 # extract taxa names from model lists
 taxaNames = nbModFiles %>% 
   map(~sapply(strsplit(sapply(strsplit(.x, "/"),"[",10),"_"), "[", 1)) %>% 
