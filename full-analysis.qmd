@@ -363,11 +363,26 @@ future_pmap(
 We can extract all the model estimates and merge with site and taxonomy data to look at patterns.
 
 ```{r get-nb-data, echo=TRUE, eval= TRUE}
-macroTaxaSiteDf = readRDS(here('data/derived-data/macroTaxaSiteDf.rds'))
-
 # use the est_dw() function to convert length estimates to mass 
-macroTaxaSiteDf = macroTaxaSiteDf %>%
-  mutate(across(c(mean, median, sd, q5, q95), ~est_dw_simp(.x, a,b,formula_type), .names = "dw_{.col}"))
+macroTaxaSiteDf =readRDS(here('data/derived-data/macroTaxaSiteDf.rds')) %>%
+  mutate(across(c(mean, median, sd, q5, q95),
+                ~est_dw_simp(.x, a,b,formula_type),
+                .names = "dw_{.col}")) %>% 
+  ## do some fixes of taxa with missing information
+  dplyr::mutate(genus = case_when(scientificName == 'Monophylax mono' ~ 'Monophylax',
+                                  scientificName == 'Nanocladius (Plecopterocoluthus) sp.' ~ 'Nanocladius',
+                                  .default = genus)) %>% 
+  dplyr::mutate(lowestClassification = case_when(
+    stringr::str_detect(scientificName,'nae') & is.na(genus) & family %in% 'Chironomidae' ~ 'subfamily',
+    stringr::str_detect(scientificName, 'dae', negate = TRUE) & is.na(genus) & family %in% 'Chironomidae' ~ 'tribe',
+    is.na(genus) & family %in% 'Chironomidae' ~ 'family',
+    is.na(subclass) & is.na(order) & is.na(family) & is.na(genus)~ 'class',
+    is.na(order) & is.na(family) & is.na(genus) ~ 'subclass',
+    is.na(family) & is.na(genus) ~ 'order',
+    is.na(genus) ~ 'family',
+    specificEpithet %in% c('sp.','gr.') ~ 'genus',
+    .default = 'species')) %>% 
+  dplyr::select(scientificName, acceptedTaxonID, class, subclass, order, family, genus, specificEpithet, lowestClassification, site, lat, long, variable, dw_mean, dw_median, dw_sd, dw_q5, dw_q95)
 ```
 
 Now we have all the estimated variables we might want to model and we have converted from length to mass, let's take a look at some summaries of the distinct counts at different taxonomic levels.
@@ -455,13 +470,22 @@ taxonIDTab %>%
 
 ### Plots of some examples
 
+```{r all-response, eval = TRUE, echo = FALSE}
+
+# isolate all the taxa with multiple sites
+macroTaxaMultiSite = macroTaxaSiteDf %>% 
+  dplyr::filter(grepl('max_ref_rep', variable)) %>% 
+  dplyr::mutate(site_n = count(site), .by = c(acceptedTaxonID)) %>% 
+  dplyr::filter(site_n > 2)
+
+```
+
 An example with the chironomid in the genus `Polypedilum` (acceptedTaxonID = POLSP13).
 
 ```{r single-taxa-ex, eval=TRUE, echo=FALSE}
 
-macroTaxaSiteDf %>% 
+macroTaxaMultiSite %>% 
   dplyr::filter(acceptedTaxonID == 'POLSP13') %>% 
-  dplyr::filter(grepl('max_ref_rep', variable)) %>% 
   ggplot()+
   stat_smooth(aes(x=lat, y = (dw_mean)), color = 'black', alpha = 0.5, se = FALSE, method = 'lm', geom = 'line')+
   geom_errorbar(aes(x = lat, ymin =(dw_q5), ymax = (dw_q95)))+
@@ -475,9 +499,8 @@ macroTaxaSiteDf %>%
 Family Baetidae
 
 ```{r single-family-example, eval=TRUE, echo=FALSE}
-macroTaxaSiteDf %>%   
+macroTaxaMultiSite %>%   
   dplyr::filter(family == 'Baetidae') %>% 
-  dplyr::filter(grepl('max_ref_rep', variable)) %>% 
   ggplot()+
     stat_smooth(aes(x=lat, y = (dw_mean), group = genus), color = 'black', alpha = 0.5, se = FALSE, method = 'lm', geom = 'line')+
   stat_smooth(aes(x = lat, y = dw_mean), color = 'blue', se = FALSE, method = 'lm')+
@@ -487,6 +510,45 @@ macroTaxaSiteDf %>%
   coord_transform(y = 'log10')+
   theme(legend.position = 'none')
 ```
+
+All data grouped by acceptedTaxonID
+
+Species levels patterns when the lowest taxonomic level is species and there are observations across more than 2 sites
+
+```{r species-level, eval = TRUE, echo=FALSE}
+macroTaxaMultiSite %>% 
+  dplyr::filter(lowestClassification == 'species') %>% 
+  ggplot()+
+  stat_smooth(aes(x = lat, y = log10(dw_mean), group = acceptedTaxonID), color = 'black',
+alpha = 0.5, se = FALSE, method = 'lm', geom = 'line')+
+  # geom_errorbar(aes(x = lat, ymin =(dw_q5), ymax = (dw_q95)))+
+  # geom_point(aes(x = lat, y = (dw_mean), fill = family), shape = 21, size = 1)+
+  # scale_fill_viridis(discrete = TRUE)+
+  scale_color_viridis(discrete = TRUE)+
+  # coord_transform(y = 'log10')+
+  theme(legend.position = 'none')
+```
+
+Genus levels patterns when the lowest taxonomic level is genus or species and there are observations across more than 2 sites
+
+```{r genus-level, echo=FALSE, eval=TRUE}
+macroTaxaMultiSite %>% 
+  dplyr::filter(lowestClassification %in% c('genus','species')) %>% 
+  ggplot()+
+  stat_smooth(aes(x = lat, y = log10(dw_mean), group = genus), color = 'grey',
+alpha = 0.5, se = FALSE, method = 'lm', geom = 'line')+
+  # geom_errorbar(aes(x = lat, ymin =(dw_q5), ymax = (dw_q95)))+
+  # geom_point(aes(x = lat, y = (dw_mean), fill = family), shape = 21, size = 1)+
+  # scale_fill_viridis(discrete = TRUE)+
+  scale_color_viridis(discrete = TRUE)+
+  # coord_transform(y = 'log10')+
+  coord_cartesian(ylim = c(-3,NA))+
+  theme(legend.position = 'none')
+
+```
+
+Work in progress
+-----
 
 ## Fitting max length models
 

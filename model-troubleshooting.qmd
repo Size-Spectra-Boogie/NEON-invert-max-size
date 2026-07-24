@@ -31,6 +31,9 @@ knitr::knit_hooks$set(fig_collapse=function(before, options, envir) {
 
 source(here::here('code/00_init.R'))
 
+ifelse(parallelly::availableCores() == 24,future::plan('multisession', workers = 10, gc = TRUE), future::plan('multisession', workers = 6, gc = TRUE))
+
+
 ```
 
 This page is for documenting the model checking procedures for the maximum size estimation models. The models were all fit originally using the hierarchical negative binomial model `code/stan/hierarchical_nb_max_size_stable`. With these fits, we identified a number of issues, so we are now working backwards to simpler models. I outline below the steps to keep a record for future.
@@ -48,7 +51,7 @@ macroTaxaStanData %>%
 
 ```
 
-This is likely a large part of the issue. Which became apparent with the checks below
+This is a large part of the issue. Which became apparent with the checks below.
 
 ### Check models with divergences after sampling
 
@@ -56,14 +59,18 @@ Lots of the models exhibit divergences after warming, most often this is \~1% of
 
 ```{r nb-divergences}
 nbFiles = list.files(here('ignore/models/'), '.rds', full.names = TRUE)
-
+taxaNames = nbFiles %>% 
+  map(~sapply(strsplit(sapply(strsplit(.x, "/"),"[",10),"_"), "[", 1)) %>% 
+  unlist
+nbFiles = setNames(nbFiles, taxaNames)
+# check for # of divergences
 nbDivergences = nbFiles %>% 
-  map(~check_divergences(filePath = .x))
+  future_map(~check_divergences(filePath = .x))
 # what is the distribution of divergent #s
 nbDivergences %>% map(~.x %>% pluck('num_diverge') %>% unlist) %>% unlist %>% hist
 # what is maximum # of divergences
 nbDivergences %>% map(~.x %>% pluck('num_diverge') %>% unlist) %>% unlist %>% max
-
+which(nbDivergences %>% map(~.x %>% pluck('num_diverge') %>% unlist) %>% unlist == 1116)
 #what is the 75-percentile # of divergences
 nbDivergences %>% map(~.x %>% pluck('num_diverge') %>% unlist) %>% unlist %>% quantile(., 0.75)
 
@@ -75,10 +82,8 @@ highDiverge = nbDivergences %>%
   map(~.x %>% pluck('num_diverge') %>% unlist) %>% 
   unlist 
 
-taxaDivergeList = nbDivergentFiles %>% 
-  map(~sapply(strsplit(sapply(strsplit(.x,"/"), "[", 10), "_"), "[",1))
 
-divergeStanData = macroTaxaStanData[names(macroTaxaStanData) %in% taxaDivergeList]
+divergeStanData = macroTaxaStanData[names(macroTaxaStanData) %in% names(nbDivergentFiles )]
 
 # how many of the divergence taxa have only a single site?
 divergeStanData %>% 
@@ -94,11 +99,12 @@ divergeStanData %>%
   unlist %>% 
   keep(~.x == 2) %>% 
   count()
+
 ```
 
 To address this issue, we built a simpler single site model as that is the most straightforward way to address this issue. This model is `code/stan/single_nb_max_size_stable.stan`. So with this new approach, I refit just the taxa with observations at only a single site.
 
-```{r refit-S-of-one}
+```{r refit-S-of-one, eval = FALSE}
 # do a clean load of the stan data to ensure we don't mess anything up
 ## I am only loading the single model here to ensure we don't accidentally overwrite a model we don't want to 
 single_mod = cmdstan_model(here('code/stan/single_nb_max_size_stable.stan'))
@@ -131,7 +137,6 @@ taxaRecent = singleTaxaNames %>%
 x = macroTaxaSingleStanData[!taxaRecent]
 y = singleTaxaNames[!taxaRecent]
 # debugonce(fit_negbin_named)
-future::plan("multisession", workers = 10, gc = TRUE)
 future_walk2(
    x,
    y,
@@ -144,15 +149,29 @@ future_walk2(
 A few models still have divergences. I will troubleshoot these but I wanted to work on importing and passing along initial results while I work on divergences.
 
 
-```{r check-ints}
+```{r check-ints, eval = FALSE}
 # make a list of initialization values for checking 
-init_lists = macroTaxaStanData %>% 
-  map(~make_init_list_stable(
-    stan_data = .x,
-    chains = 4L,
-    seed = 1312)
-    )
-saveRDS(init_lists, here('ignore/nb_init_lists.rds'))
+if(rerun_data){
+  init_lists = macroTaxaStanData %>% 
+  map(~\(x){
+    if(x$S == 1){
+      make_init_list_single_site(
+        stan_data = .x,
+        chains = 4L,
+        seed = 1312
+      )
+    } else{
+      make_init_list_stable(
+        stan_data = .x,
+        chains = 4L,
+        seed = 1312)
+    }
+    }
+    ) %>%
+    saveRDS(here('ignore/nb_init_lists.rds'))
+} else{
+  init_lists = readRDS(here('ignore/nb_init_lists.rds'))
+}
 # code to check initialization values
 tau_log_lambda_inits = init_lists %>% 
   future_map(
@@ -542,7 +561,7 @@ DRUCOR_initList = init_lists[["DRUCOR"]]
 
 Some of the models just have too few sites/samples to adequately and reasonably fit the model. We can prescreen these models using some minimum criteria such as \# of sampling events. Below we explore the data and sampling space that we show divergences.
 
-```{r screen-bad-models}
+```{r screen-bad-models, eval = FALSE}
 badTaxa = c(
   "DRUCOR",
 )
@@ -552,7 +571,7 @@ badTaxa = c(
 
 Some of the initial values for the `tau_log_lambda` parameters run up against the set boundaries for this parameters. The value is set at an upper range of `4`. This parameter characterizes the across site expectation in log expected counts. We bounded this to avoid drawing prior draws that lead to `Inf` values during sampling. However, if counts vary greatly among sites, our initial values might exceed this limit leading to rejection of some or all chains. For context, this parameter represents a multiplicative difference in counts, therefore with a limit of `4`, as set, corresponds to a 55x difference in counts for a site that is one-standard deviation. I include a step to check the initialization values for better model specification in the future.
 
-```{r boundary-check}
+```{r boundary-check, eval = FALSE}
 
 # some of the initializations and posteriors for tau_log_sigma to ensure mass is not near upper bounds
 checkList = c(
@@ -570,7 +589,7 @@ checkList = c(
 )
 ```
 
-```{r initialization checks}
+```{r initialization checks, eval = FALSE}
 # code to check initialization values
 tau_log_lambda_inits = init_lists %>% 
   future_map(
