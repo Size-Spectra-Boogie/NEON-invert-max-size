@@ -18,7 +18,7 @@ This script outlines the process to download macroinvertebrate data from a worki
 
 We set the specifications of the s3 bucket. This bucket is publicly readable:
 
-```{r set bucket specs, eval = TRUE, echo = TRUE} 
+```{r set bucket specs, eval = TRUE, echo = TRUE}
 # set the s3 bucket specs  
 bucket = "neonsizedata-392202703749-us-east-2-an"
 prefix = "neonstore/parquet"

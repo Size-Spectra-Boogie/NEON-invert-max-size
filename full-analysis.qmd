@@ -70,7 +70,7 @@ Below, I test a simulated data set with the negative binomial count model agains
 
 <details>
 
-```{r simulate-multisite data, echo=TRUE, eval = TRUE}
+```{r simulate-multisite data, echo=TRUE, eval = TRUE, message = FALSE}
 ## set the simulation parameters
 simPars = data.frame(site = c('a','b','c','d','e'),
                      mu = c(10,8,7.8, 3, 9.5),
@@ -90,7 +90,7 @@ simList = mapply(FUN = truncnorm::rtruncnorm,mean = c(10,8,7.8, 3, 9.5),sd = c(1
                                  a = 0))
 # plot the distributions
 par(mfrow = c(2,3))
-apply(simList,2,hist)
+apply(simList,2,function(x) invisible(hist(x)))
 
 ## simulate the sampling process and spit out in stan_data format
 sim = simulation(simPars = simPars, seed = 1312)
@@ -301,7 +301,7 @@ taxaNames = names(macroTaxaStanData)
 
 #### Note of caution
 
-Some of the checking of model behavior is outlined in the `model-troubleshooting` file to keep this clean. The majority of this was dealing with divergences when trying to fit a hiearchical model to single-site data (duh!), but a few others need to be checked to ensure good inferences. These results below are preliminary and once updated this warning will be removed.
+Some of the checking of model behavior is outlined in the `model-troubleshooting` file to keep this clean. The majority of this was dealing with divergences when trying to fit a hiearchical model to single-site data (duh!), but a few others need to be checked to ensure good inferences. For the results below, I focus on the mean size estimates, as the maxes are a unrealistically large for some taxa. These results below are preliminary and once updated this warning will be removed.
 
 ### Checking model results
 
@@ -385,9 +385,9 @@ macroTaxaSiteDf =readRDS(here('data/derived-data/macroTaxaSiteDf.rds')) %>%
   dplyr::select(scientificName, acceptedTaxonID, class, subclass, order, family, genus, specificEpithet, lowestClassification, site, lat, long, variable, dw_mean, dw_median, dw_sd, dw_q5, dw_q95)
 ```
 
-Now we have all the estimated variables we might want to model and we have converted from length to mass, let's take a look at some summaries of the distinct counts at different taxonomic levels.
+Now we have all the estimated variables we might want to model and we have converted from length to mass, let's take a look at some summaries of the distinct counts of unique site-taxa combintions at different taxonomic levels.
 
-```{r taxonomic-summaries, echo=TRUE, eval=TRUE}
+```{r taxonomic-summaries, echo=FALSE, eval=TRUE}
 classTab = macroTaxaSiteDf %>% 
   dplyr::filter(grepl('size_mean',variable),
                 !is.na(class)) %>% 
@@ -473,41 +473,70 @@ taxonIDTab %>%
 ```{r all-response, eval = TRUE, echo = FALSE}
 
 # isolate all the taxa with multiple sites
-macroTaxaMultiSite = macroTaxaSiteDf %>% 
+macroTaxaMultiSite_max = macroTaxaSiteDf %>% 
   dplyr::filter(grepl('max_ref_rep', variable)) %>% 
+  dplyr::mutate(site_n = count(site), .by = c(acceptedTaxonID)) %>% 
+  dplyr::filter(site_n > 2)
+
+macroTaxaMultiSite_mean = macroTaxaSiteDf %>% 
+  dplyr::filter(grepl('size_mean', variable)) %>% 
   dplyr::mutate(site_n = count(site), .by = c(acceptedTaxonID)) %>% 
   dplyr::filter(site_n > 2)
 
 ```
 
-An example with the chironomid in the genus `Polypedilum` (acceptedTaxonID = POLSP13).
+An example with chironomid in the genus `Polypedilum` (acceptedTaxonID = POLSP13). We show both patterns with max and mean estimated size.
 
-```{r single-taxa-ex, eval=TRUE, echo=FALSE}
+```{r single-taxa-max, eval=TRUE, echo=FALSE, fig.cap="Figure of estimated max size with latitude across all sites."}
 
-macroTaxaMultiSite %>% 
+macroTaxaMultiSite_max %>% 
   dplyr::filter(acceptedTaxonID == 'POLSP13') %>% 
   ggplot()+
-  stat_smooth(aes(x=lat, y = (dw_mean)), color = 'black', alpha = 0.5, se = FALSE, method = 'lm', geom = 'line')+
+  stat_smooth(aes(x=lat, y = (dw_mean)), color = 'black', alpha = 1, se = FALSE, method = 'lm', geom = 'line', linewidth = 1)+
   geom_errorbar(aes(x = lat, ymin =(dw_q5), ymax = (dw_q95)))+
   geom_point(aes(x = lat, y = (dw_mean), fill = site), shape = 21, size = 1)+
+  scale_y_continuous(name = expression(L[max]~"(mg dry mass)"))+
+  scale_x_continuous(name = expression("Latitude ("^o*"N )"), limits = c(0,90))+
   scale_fill_viridis(discrete = TRUE)+
-  coord_transform(y = 'log10')+
+  coord_cartesian(ylim = c(0,NA))+
+  # coord_transform(y = 'log10')+
   theme(legend.position = 'none')
 
 ```
 
+```{r single-taxa-mean, eval=TRUE, echo=FALSE, fig.cap="Figure of estimated mean size with latitude across all sites."}
+
+macroTaxaMultiSite_mean %>% 
+  dplyr::filter(acceptedTaxonID == 'POLSP13') %>% 
+  ggplot()+
+  stat_smooth(aes(x=lat, y = (dw_mean)), color = 'black', alpha = 1, se = FALSE, method = 'lm', geom = 'line', linewidth = 1)+
+  geom_errorbar(aes(x = lat, ymin =(dw_q5), ymax = (dw_q95)))+
+  geom_point(aes(x = lat, y = (dw_median), fill = site), shape = 21, size = 1)+
+  scale_y_continuous(name = expression(L[mean]~"(mg dry mass)"))+
+  scale_x_continuous(name = expression("Latitude ("^o*"N )"), limits = c(0,90))+
+  scale_fill_viridis(discrete = TRUE)+
+  coord_cartesian(ylim = c(0,NA))+
+  # coord_transform(y = 'log10')+
+  theme(legend.position = 'none')
+
+```
+
+
 Family Baetidae
 
-```{r single-family-example, eval=TRUE, echo=FALSE}
-macroTaxaMultiSite %>%   
+```{r single-family-example, eval=TRUE, echo=FALSE, fig.cap="Estimated max sizes (Lmax) for distinct species within the family Baetidae across all sites. Predicted latitudinal trends within a taxon are displayed with light black lines. The family level response is shown in blue. Points are site x species estimates with the 95% credible interval."}
+macroTaxaMultiSite_mean %>%   
   dplyr::filter(family == 'Baetidae') %>% 
   ggplot()+
-    stat_smooth(aes(x=lat, y = (dw_mean), group = genus), color = 'black', alpha = 0.5, se = FALSE, method = 'lm', geom = 'line')+
-  stat_smooth(aes(x = lat, y = dw_mean), color = 'blue', se = FALSE, method = 'lm')+
+    stat_smooth(aes(x=lat, y = (dw_mean), group = acceptedTaxonID), color = 'black', alpha = 0.6, se = FALSE, method = 'lm', geom = 'line', linewidth = 1)+
+  stat_smooth(aes(x = lat, y = dw_mean), color = 'blue', se =TRUE, method = 'lm', alpha = 0.3, geom = 'smooth', linewidth = 1.5)+
   geom_errorbar(aes(x = lat, ymin =(dw_q5), ymax = (dw_q95)))+
-  geom_point(aes(x = lat, y = (dw_mean), fill = site), shape = 21, size = 1)+
+  geom_point(aes(x = lat, y = (dw_mean), fill = acceptedTaxonID), shape = 21, size = 2, alpha = 0.5)+
+  scale_y_continuous(name = expression(L[mean]~"(mg dry mass)"), limits = c(0,NA))+
+  scale_x_continuous(name = expression("Latitude ("^o*"N )"), limits = c(0,90))+
   scale_fill_viridis(discrete = TRUE)+
-  coord_transform(y = 'log10')+
+  coord_cartesian(ylim = c(0,NA))+
+  # coord_transform(y = 'log10')+
   theme(legend.position = 'none')
 ```
 

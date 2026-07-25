@@ -148,6 +148,74 @@ future_walk2(
 
 A few models still have divergences. I will troubleshoot these but I wanted to work on importing and passing along initial results while I work on divergences.
 
+## Max estimates are very high in some cases
+
+Initial exploration of the model results suggest that there are some instances when site-level maximums of some species are very unreasonably high. E.g, 20 mm when the largest observed individual across all sites is 11 mm after we sample. 
+
+So I went about reassessing this model to do two things 1) actually account for the binned structure of the data and 2) build in upper bounds on the truncated normal that are flexible, but also do not put probability in mass ranges that are very unlikely and biologically impossible. This does two important things the original model failed to do. First, the artificial jittering created artificial variability when we can simply account for the bin structure. Second, it 
+
+Here is an example using a well sampled example. The current maximum estimates for this taxa using the lower-truncated Normal are >20mm. But the maximum observed size across >90k individuals is 11mm.
+
+```{r calibaetis-example}
+
+CALSP14 = macroDWList[grepl('CALSP14', names(macroDWList))] %>% do.call('rbind',.)
+
+CALSP14 %>% 
+  uncount(weights = no_m2) %>% 
+  select(sizeClass) %>% 
+  unlist %>% 
+  hist(.)
+
+x = macroTaxaStanData[[1]] %>% pluck('x')
+
+```
+
+```{r new-binned-mod}
+
+
+
+prepared <- make_binned_nb_stan_data(
+  bin_data = example_taxon,
+  event_data = NULL,
+  upper_multiplier_max = 1.3,
+  k_ref = 20L,
+  mu_upper = 400,
+  sigma_upper = 200,
+  prior_only = 0L
+)
+
+stan_data <- prepared$stan_data
+
+# for single site
+single_site_data <- prepared$stan_data[
+  c(
+    "K",
+    "B_obs",
+    "n_per_sample",
+    "bin_event",
+    "bin_count",
+    "bin_lower",
+    "bin_upper",
+    "size_lower",
+    "upper_multiplier_max",
+    "k_ref",
+    "mu_upper",
+    "sigma_upper",
+    "prior_only"
+  )
+]
+
+# single site initializer only has
+list(
+  log_mu = ...,
+  log_sigma = ...,
+  upper_fraction = ...,
+  log_lambda = ...,
+  log_phi = ...
+)
+
+```
+## Model diagnostics
 
 ```{r check-ints, eval = FALSE}
 # make a list of initialization values for checking 
