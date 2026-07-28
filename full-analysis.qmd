@@ -1,6 +1,7 @@
 ---
 title: "full-analysis"
 format: html
+editor: source
 ---
 
 <link rel="stylesheet" type="text/css" href="http://cdn.datatables.net/1.10.5/css/jquery.dataTables.min.css">
@@ -474,7 +475,7 @@ taxonIDTab %>%
 
 # isolate all the taxa with multiple sites
 macroTaxaMultiSite_max = macroTaxaSiteDf %>% 
-  dplyr::filter(grepl('max_ref_rep', variable)) %>% 
+  dplyr::filter(grepl('size_q95', variable)) %>% 
   dplyr::mutate(site_n = count(site), .by = c(acceptedTaxonID)) %>% 
   dplyr::filter(site_n > 2)
 
@@ -526,11 +527,25 @@ Family Baetidae
 
 ```{r single-family-example, eval=TRUE, echo=FALSE, fig.cap="Estimated max sizes (Lmax) for distinct species within the family Baetidae across all sites. Predicted latitudinal trends within a taxon are displayed with light black lines. The family level response is shown in blue. Points are site x species estimates with the 95% credible interval."}
 macroTaxaMultiSite_mean %>%   
+  dplyr::filter(family == 'Chironomidae') %>% 
+  ggplot()+
+    # stat_smooth(aes(x=lat, y = (dw_mean), group = acceptedTaxonID), color = 'black', alpha = 0.6, se = FALSE, method = 'lm', geom = 'line', linewidth = 1)+
+  # stat_smooth(aes(x = lat, y = dw_mean), color = 'blue', se =TRUE, method = 'lm', alpha = 0.3, geom = 'smooth', linewidth = 1.5)+
+  # geom_errorbar(aes(x = lat, ymin =(dw_q5), ymax = (dw_q95)))+
+  geom_point(aes(x = lat, y = (dw_mean), fill = acceptedTaxonID), shape = 21, size = 2, alpha = 0.5)+
+  scale_y_continuous(name = expression(L[mean]~"(mg dry mass)"), limits = c(NA,NA))+
+  scale_x_continuous(name = expression("Latitude ("^o*"N )"), limits = c(0,90))+
+  scale_fill_viridis(discrete = TRUE)+
+  # coord_cartesian(ylim = c(0,NA))+
+  coord_transform(y = 'log10')+
+  theme(legend.position = 'none')
+
+macroTaxaMultiSite_max %>%   
   dplyr::filter(family == 'Baetidae') %>% 
   ggplot()+
     stat_smooth(aes(x=lat, y = (dw_mean), group = acceptedTaxonID), color = 'black', alpha = 0.6, se = FALSE, method = 'lm', geom = 'line', linewidth = 1)+
   stat_smooth(aes(x = lat, y = dw_mean), color = 'blue', se =TRUE, method = 'lm', alpha = 0.3, geom = 'smooth', linewidth = 1.5)+
-  geom_errorbar(aes(x = lat, ymin =(dw_q5), ymax = (dw_q95)))+
+  # geom_errorbar(aes(x = lat, ymin =dw_mean -(dw_q5), ymax = dw_mean + (dw_q95)))+
   geom_point(aes(x = lat, y = (dw_mean), fill = acceptedTaxonID), shape = 21, size = 2, alpha = 0.5)+
   scale_y_continuous(name = expression(L[mean]~"(mg dry mass)"), limits = c(0,NA))+
   scale_x_continuous(name = expression("Latitude ("^o*"N )"), limits = c(0,90))+
@@ -545,7 +560,7 @@ All data grouped by acceptedTaxonID
 Species levels patterns when the lowest taxonomic level is species and there are observations across more than 2 sites
 
 ```{r species-level, eval = TRUE, echo=FALSE}
-macroTaxaMultiSite %>% 
+macroTaxaMultiSite_mean %>% 
   dplyr::filter(lowestClassification == 'species') %>% 
   ggplot()+
   stat_smooth(aes(x = lat, y = log10(dw_mean), group = acceptedTaxonID), color = 'black',

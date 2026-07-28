@@ -31,8 +31,9 @@ knitr::knit_hooks$set(fig_collapse=function(before, options, envir) {
 
 source(here::here('code/00_init.R'))
 
-ifelse(parallelly::availableCores() == 24,future::plan('multisession', workers = 10, gc = TRUE), future::plan('multisession', workers = 6, gc = TRUE))
-
+if(!inherits(plan(), 'multisession')){
+ifelse(parallelly::availableCores() == 24, future::plan('multisession', workers = 10, gc = TRUE), future::plan('multisession', workers = 6, gc = TRUE))
+}
 
 ```
 
@@ -172,49 +173,255 @@ x = macroTaxaStanData[[1]] %>% pluck('x')
 
 ```{r new-binned-mod}
 
+macroTaxaList = readRDS(here('data/derived-data/macroTaxaList.rds'))
 
-
-prepared <- make_binned_nb_stan_data(
-  bin_data = example_taxon,
+# debugonce(make_binned_nb_stan_data)
+x = make_binned_nb_stan_data(
+  bin_data = macroTaxaList[[1]],
   event_data = NULL,
   upper_multiplier_max = 1.3,
   k_ref = 20L,
   mu_upper = 400,
   sigma_upper = 200,
   prior_only = 0L
+  )
+
+stan_data <- x$stan_data
+
+debugonce(make_init_list_binned_nb)
+init_list = make_init_list_binned_nb(
+  stan_data = stan_data,
+  chains = 4L,
+  seed = 1312
 )
 
-stan_data <- prepared$stan_data
+single_mod = cmdstan_model(here('code/stan/single_nb_max_size_bin.stan'))
+stan_data$S <- stan_data$site_id  <- NULL
 
-# for single site
-single_site_data <- prepared$stan_data[
-  c(
-    "K",
-    "B_obs",
-    "n_per_sample",
-    "bin_event",
-    "bin_count",
-    "bin_lower",
-    "bin_upper",
-    "size_lower",
-    "upper_multiplier_max",
-    "k_ref",
-    "mu_upper",
-    "sigma_upper",
-    "prior_only"
+fit = single_mod$sample(
+        data = stan_data,
+        seed = 1312,
+        chains = 4L,
+        parallel_chains = 4L,
+        
+        init = init_list,
+        
+        iter_warmup = 1500,
+        iter_sampling = 1000,
+        adapt_delta = 0.99,
+        max_treedepth = 12,
+        refresh = 0
+)
+
+y = fit$summary()
+
+macroTaxaList[[1]] %>% 
+  uncount(weights = no_m2) %>% 
+  select(sizeClass) %>% 
+  unlist %>% 
+  hist
+
+## multisite model test
+x = make_retention_grid_stan_data(
+  bin_data = macroTaxaList[[1]],
+  event_data = NULL,
+  morin_link = "logistic",
+
+  prior_only = 0L
   )
-]
 
-# single site initializer only has
-list(
-  log_mu = ...,
-  log_sigma = ...,
-  upper_fraction = ...,
-  log_lambda = ...,
-  log_phi = ...
+stan_data <- x$stan_data
+
+# debugonce(make_init_binned_nb)
+init_list = make_retention_grid_init(
+  stan_data = stan_data,
+  chains = 4L,
+  seed = 1312
+)
+
+multi_mod_ln_full = cmdstan_model(here('code/stan/hierarchical_ln_max_size_binned.stan'))
+multi_mod_ln_slim = cmdstan_model(here('code/stan/hierarchcial_ln_max_size_binned_slim.stan'))
+
+
+fit = multi_mod_ln_full$sample(
+        data = stan_data,
+        seed = 1312,
+        chains = 4L,
+        parallel_chains = 4L,
+        
+        init = init_list,
+        
+        iter_warmup = 1500,
+        iter_sampling = 1000,
+        adapt_delta = 0.99,
+        max_treedepth = 12,
+        refresh = 0
+)
+
+y = fit$summary()
+
+macroTaxaList[[1]] %>% 
+  uncount(weights = no_m2) %>% 
+  select(sizeClass) %>% 
+  unlist %>% 
+  hist
+```
+
+We have moved from the truncated normal because of poor behavior with the binned data structure and the 
+
+```{r ln-softmax-binned-model}
+
+multi_mod_ln_slim = cmdstan_model(here('code/stan/hierarchical_ln_max_size_binned_slim.stan'))
+
+macroTaxaList %>% 
+  future_map(~make_retention_grid_stan_data(
+  bin_data = .x,
+  event_data = NULL,
+  morin_link = "logistic",
+
+  prior_only = 0L
+  )) %>% 
+  saveRDS(here('ignore/macroTaxaStanDatalnFull.rds'))
+
+macroTaxaStanData = readRDS(here('ignore/macroTaxaStanDatalnFull.rds')) %>% 
+  map(~.x$stan_data)
+
+# reorder macroTaxaStanData by most rows to fewest for distributing future work
+macroTaxaStanData = macroTaxaStanData[order(sapply(macroTaxaStanData, function(x) (x$S + 1) * x$G * x$J + x$K * x$B), decreasing = TRUE)]
+## set the taxa names for naming models
+taxaNames = names(macroTaxaStanData)
+
+
+# debugonce(fit_ln_named)
+future_walk2(macroTaxaStanData, taxaNames,
+~fit_ln_named(
+  stan_data = .x,
+  taxaName = .y,
+  rerun = TRUE,
+  overwrite = FALSE
+),
+.options = furrr_options(seed =1312, scheduling = Inf)
 )
 
 ```
+
+## Model diagnostics for the ln softmax model
+
+We can run a full model with all returned quantities (grids, probabilities, etc.), or run a slimmed model and later resample a full diagnostic model from the fits for posterior checks.
+
+```{r full-diagnostics}
+
+# load in the fit of a single 'slim' model
+fit = readRDS(here('ignore/models/UVASP_lnbin.rds'))
+stan_data = macroTaxaStanData[['UVASP']]
+
+multi_mod_ln_full = cmdstan_model(here('code/stan/hierarchical_ln_max_size_binned.stan'))
+
+gq_fit <- multi_mod_ln_full$generate_quantities(
+  fitted_params = fit,
+  data = stan_data
+)
+
+full_diagnostics = gq_fit$summary()
+macroTaxaList[['UVASP']] %>% 
+  uncount(weights = no_m2) %>% 
+  select(sizeClass) %>% 
+  unlist %>% 
+  hist
+```
+
+The full diagnostics samples a number of other quantities we might be interested, but these are mostly model parameters. Of interest would be the `y_rep*` variables that desribe the expected samples count for each bin. In the above example we only have a single site with a single observation of 11 individuals in sizeclass bin 1mm. The estimated mean size of this taxa is `r full_diagnostics %>% dplyr::filter(grepl('size_mean', variable) %>% select(mean) %>% round(3)` [`r full_diagnostics %>% dplyr::filter(grepl('size_mean', variable) %>% select(q5) %>% round(3)` - `r full_diagnostics %>% dplyr::filter(grepl('size_mean', variable) %>% select(q95) %>% round(3)` 95% Credibility Interval]. 
+
+### Extract model fits
+
+```{r prep-data-extract, echo = TRUE, eval = FALSE}
+# load in the model files lists
+softmaxModFiles = list.files(here('ignore/models/'), '_lnbin.rds', full.names = TRUE)
+
+# extract taxa names from model lists
+taxaNames = softmaxModFiles %>% 
+  map(~sapply(strsplit(sapply(strsplit(.x, "/"),"[",10),"_"), "[", 1)) %>% 
+  unlist
+
+# load in site index for each taxa
+macroTaxaSiteIndex = readRDS(here('ignore/macroTaxaStanDatalnFull.rds')) %>% 
+  future_map(~.x %>% pluck('mapping') %>% pluck('site') %>% mutate(site_id = as.character(site_id)))
+# set the model index order to each taxa
+macroTaxaSiteIndex = macroTaxaSiteIndex[taxaNames]
+
+## read in the taxonomy data to join with index
+macroTaxonomy = readRDS(here('data/NEON-macros-tax.rds'))
+
+# read in length-mass regression  
+lwCoefsDf = read.csv(here('data/macro_lw_coeffs.csv')) #%>% 
+  # add in others that don't have l-m below
+
+# add this to the macroTaxonomy to read in later.
+# debugonce(LW_coef)
+macroTaxonomy = macroTaxonomy %>% 
+  LW_coef(., lw_coef = lwCoefsDf, percent = TRUE)
+# read in and clean the site lat-long data to merge with index
+siteCoords = read.csv(here('data/site_latlong.csv')) %>% 
+  bind_rows(data.frame(
+    site = c('BLWA', 'FLNT', 'LIRO','PRLA','SUGG','BARC','PRPO','CRAM','TOOK','TOMB'),
+    lat = c(32.54153,31.18542,45.99827,47.15909,29.68778,29.67598,47.12984,46.20967,68.63069,31.85343),
+    long = c(-87.79815,-84.43740,-89.70477,-99.11388,-82.01775,-82.00841,-99.25315,-89.47369,-149.61064,-88.15887)
+  ))
+  
+x = softmaxModFiles[2]
+y = taxaNames[2]
+z = macroTaxaSiteIndex[[2]]
+debugonce(extract_max_softmax)
+extract_max_softmax(filePath = x, name = y, siteIndex = z) %>% 
+  dplyr::select(-site_id)
+
+# here is the function to prepare the full data frame with estimated maximum mass. This saves the table so we don't have rerun this every time. Takes 20min (too long) to run sequentially.
+if(rerun_data){
+  if(!inherits('multisession', plan())){
+    future::plan('multisession', workers = 10, gc = TRUE)
+  }
+future_pmap(
+  list(softmaxModFiles, taxaNames, macroTaxaSiteIndex),
+  ~extract_max_softmax(filePath = ..1, name = ..2, siteIndex = ..3)
+  ) %>%
+  bind_rows() %>% 
+  dplyr::select(-site_id) %>% 
+  dplyr::select(acceptedTaxonID, site = siteID, everything()) %>% 
+  dplyr::mutate(site = trimws(as.character(site))) %>% 
+  right_join(macroTaxonomy, ., by = 'acceptedTaxonID') %>% 
+  left_join(., siteCoords, by = 'site') %>% 
+  saveRDS(here('data/derived-data/macroTaxaSiteDf_softmax.rds'))
+} else{
+  macroTaxaSiteDf = readRDS(here('data/derived-data/macroTaxaSiteDf.rds'))
+}
+
+
+
+```
+
+```{r get-softmax-data, echo=TRUE, eval= TRUE}
+# use the est_dw() function to convert length estimates to mass 
+macroTaxaSiteDf =readRDS(here('data/derived-data/macroTaxaSiteDf_softmax.rds')) %>%
+  mutate(across(c(mean, median, sd, q5, q95),
+                ~est_dw_simp(.x, a,b,formula_type),
+                .names = "dw_{.col}")) %>% 
+  ## do some fixes of taxa with missing information
+  dplyr::mutate(genus = case_when(scientificName == 'Monophylax mono' ~ 'Monophylax',
+                                  scientificName == 'Nanocladius (Plecopterocoluthus) sp.' ~ 'Nanocladius',
+                                  .default = genus)) %>% 
+  dplyr::mutate(lowestClassification = case_when(
+    stringr::str_detect(scientificName,'nae') & is.na(genus) & family %in% 'Chironomidae' ~ 'subfamily',
+    stringr::str_detect(scientificName, 'dae', negate = TRUE) & is.na(genus) & family %in% 'Chironomidae' ~ 'tribe',
+    is.na(genus) & family %in% 'Chironomidae' ~ 'family',
+    is.na(subclass) & is.na(order) & is.na(family) & is.na(genus)~ 'class',
+    is.na(order) & is.na(family) & is.na(genus) ~ 'subclass',
+    is.na(family) & is.na(genus) ~ 'order',
+    is.na(genus) ~ 'family',
+    specificEpithet %in% c('sp.','gr.') ~ 'genus',
+    .default = 'species')) %>% 
+  dplyr::select(scientificName, acceptedTaxonID, class, subclass, order, family, genus, specificEpithet, lowestClassification, site, lat, long, variable, dw_mean, dw_median, dw_sd, dw_q5, dw_q95)
+```
+
 ## Model diagnostics
 
 ```{r check-ints, eval = FALSE}
@@ -254,7 +461,7 @@ hist(tau_log_lambda_inits$max)
 
 ```{r diagnostics-bad-models}
 
-fit = readRDS(x)
+# fit = readRDS(x)
 
 diagnostics <- fit$diagnostic_summary(
   diagnostics = c(
@@ -570,9 +777,23 @@ bayesplot::mcmc_pairs(
   top_draws,
   pars = top_parameters,
   np = nuts_parameters,
-  condition = bayesplot::pairs_condition(
-    nuts = "divergent__"
+  # condition = bayesplot::pairs_condition(
+    # nuts = "divergent__"
+  # ),
+  off_diag_args = list(
+    alpha = 0.35,
+    size = 0.6
   ),
+  grid_args = list(
+    top = "Divergent versus nondivergent draws"
+  )
+)
+
+bayesplot::mcmc_pairs(
+  fit$draws(variables = c('tau_log_mu','tau_log_sigma'),
+            format = 'array'),
+  pars = c('tau_log_mu','tau_log_sigma'),
+  np = nuts_parameters,
   off_diag_args = list(
     alpha = 0.35,
     size = 0.6

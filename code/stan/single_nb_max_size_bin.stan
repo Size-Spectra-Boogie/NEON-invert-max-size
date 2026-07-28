@@ -4,33 +4,33 @@ functions {
    * falls in the interval (lower, upper].
    */
   real normal_interval_log_prob(
-      real lower,
-      real upper,
+      real x_lower,
+      real x_upper,
       real mu,
       real sigma
   ) {
-    if (upper <= lower) {
+    if (x_upper <= x_lower) {
       reject(
         "normal_interval_log_prob requires upper > lower; received ",
-        lower, " and ", upper
+        x_lower, " and ", x_upper
       );
     }
 
-    if (upper <= mu) {
+    if (x_upper <= mu) {
       return log_diff_exp(
-        normal_lcdf(upper | mu, sigma),
-        normal_lcdf(lower | mu, sigma)
+        normal_lcdf(x_upper | mu, sigma),
+        normal_lcdf(x_lower | mu, sigma)
       );
-    } else if (lower >= mu) {
+    } else if (x_lower >= mu) {
       return log_diff_exp(
-        normal_lccdf(lower | mu, sigma),
-        normal_lccdf(upper | mu, sigma)
+        normal_lccdf(x_lower | mu, sigma),
+        normal_lccdf(x_upper | mu, sigma)
       );
     } else {
       return log1m_exp(
         log_sum_exp(
-          normal_lcdf(lower | mu, sigma),
-          normal_lccdf(upper | mu, sigma)
+          normal_lcdf(x_lower | mu, sigma),
+          normal_lccdf(x_upper | mu, sigma)
         )
       );
     }
@@ -44,42 +44,42 @@ functions {
       real p,
       real mu,
       real sigma,
-      real lower,
-      real upper
+      real x_lower,
+      real x_upper
   ) {
     real p_safe =
       fmin(1 - 1e-12, fmax(1e-12, p));
 
     real p_normal;
 
-    if (upper <= mu) {
+    if (x_upper <= mu) {
       real log_p_normal =
         log_sum_exp(
           log1m(p_safe) +
-            normal_lcdf(lower | mu, sigma),
+            normal_lcdf(x_lower | mu, sigma),
           log(p_safe) +
-            normal_lcdf(upper | mu, sigma)
+            normal_lcdf(x_upper | mu, sigma)
         );
 
       p_normal =
         exp(log_p_normal);
-    } else if (lower >= mu) {
+    } else if (x_lower >= mu) {
       real log_survival =
         log_sum_exp(
           log1m(p_safe) +
-            normal_lccdf(lower | mu, sigma),
+            normal_lccdf(x_lower | mu, sigma),
           log(p_safe) +
-            normal_lccdf(upper | mu, sigma)
+            normal_lccdf(x_upper | mu, sigma)
         );
 
       p_normal =
         -expm1(log_survival);
     } else {
       real p_lower =
-        normal_cdf(lower | mu, sigma);
+        normal_cdf(x_lower | mu, sigma);
 
       real p_upper =
-        normal_cdf(upper | mu, sigma);
+        normal_cdf(x_upper | mu, sigma);
 
       p_normal =
         p_lower +
@@ -93,9 +93,9 @@ functions {
       );
 
     return fmin(
-      upper,
+      x_upper,
       fmax(
-        lower,
+        x_lower,
         mu + sigma * inv_Phi(p_normal)
       )
     );
@@ -107,19 +107,19 @@ functions {
   real bounded_trunc_normal_mean(
       real mu,
       real sigma,
-      real lower,
-      real upper
+      real x_lower,
+      real x_upper
   ) {
     real alpha =
-      (lower - mu) / sigma;
+      (x_lower - mu) / sigma;
 
     real beta =
-      (upper - mu) / sigma;
+      (x_upper - mu) / sigma;
 
     real log_z =
       normal_interval_log_prob(
-        lower,
-        upper,
+        x_lower,
+        x_upper,
         mu,
         sigma
       );
@@ -155,9 +155,9 @@ functions {
     }
 
     return fmin(
-      upper,
+      x_upper,
       fmax(
-        lower,
+        x_lower,
         mu + sigma * correction
       )
     );
