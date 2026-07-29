@@ -1,0 +1,15 @@
+---
+title: "Multi-Nomial"
+format: html
+---
+
+Introduction
+-----
+
+The most appropriate approach would be to allow us to use the information across many sites when we have many observations. To do so, a hierarchical approach is necessary. Also, there is a fundamental difference between the estimand in the Extreme Value Theory (EVT) models used below and the data we have available. The EVT models are using just the maximum values observed across the sampling years to estimate the largest size -- so we are only using something like 3-15 data points. Alternatively, we can try to use all the size information to estimate the maximum body size.
+
+I put together a hierarchical model in stan that uses a multi-nomial count model to parameterize the entire body size distribution as 1 or more mixtures and then estimates the upper body size quantiles (95%, 99%). This gets around estimating an unbounded upper bound and the difficulty in characterizing the upper tail of the size distribution. This model uses partial-pooling across sites to estimate the body size distribution from a binned log-normal multi-nomial likelihood so we can use information across many sites to inform poorly sampled sites. It also specifically accounts for inefficient sampling of size classes based on the mesh size (250 $\mu m$) and the retention probability based on Morin and colleagues [-@morin2004] The model estimates the expected density or counts for each site along with the mean and standard deviation of the truncated normal. The site-level mean and sd of the truncated normal is estimated with hyperpriors for the pooled mean and sd to allow weighting of sites with lots of data versus sites with few data.
+
+From here, we recognize that the upper body size is something we are unlikely to observe and is very likely dependent on the sampling effort in terms of years of sampling. So to estimate this and characterize the uncertainty, for each draw the model performs 20 posterior predictive simulations and estimates the max body size under a standard 'effort'. 
+
+Below, I test a simulated data set with the negative binomial count model against the models in `fishmax`. I deliberately choose a low value for the site with 1 sample to determine the effect of the pooling. This allows us to see that the model is performing as expected and estimating reasonable values. I also compare the maximum observed body size from sampling 100,000 individuals from the distributions to see expected values with extensive sampling of a distribution

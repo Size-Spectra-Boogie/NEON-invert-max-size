@@ -1196,7 +1196,7 @@ make_retention_grid_stan_data <- function(
 #
 # Matches:
 #
-#   03_retention_corrected_size_composition.stan
+#   hierarchical_ln_max_size_binned_slim.stan
 #
 # Initial values are obtained by:
 #

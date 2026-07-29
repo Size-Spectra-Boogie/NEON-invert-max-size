@@ -57,157 +57,21 @@ How many site-taxa combinations have only single year of observations?
 
 `r site_taxa_nYear_tab %>% dplyr::filter(nYear == 1) %>% nrow()`
 
-How many have 3+ years? `r site_taxa_nYear_tab %>% dplyr::filter(nYear >= 3) %>% nrow()`
+How many have 3+ years? 
 
-### Build a pooled model Negative Binomial count model and test
+`r site_taxa_nYear_tab %>% dplyr::filter(nYear >= 3) %>% nrow()`
 
-The most appropriate approach would be to allow us to use the information across many sites when we have many observations. To do so, a hierarchical approach is necessary. Also, there is a fundamental difference between the estimand in the Extreme Value Theory (EVT) models used below and the data we have available. The EVT models are using just the maximum values observed across the sampling years to estimate the largest size -- so we are only using something like 3-15 data points. Alternatively, we can try to use all the size information to estimate the maximum body size.
+### Build a pooled multinomial count model and test
 
-I put together a hierarchical model in stan that uses a negative binomial count model to parameterize the entire body size distribution and then uses posterior predictive simulations to estimate the maximum body size observed using a standardized 'effort'. This model uses partial-pooling across sites to estimate the body size distribution from a truncated normal distribution so we can use information across many sites to inform poorly sampled sites. The model estimates the expected density or counts for each site along with the mean and standard deviation of the truncated normal. The site-level mean and sd of the truncated normal is estimated with hyperpriors for the pooled mean and sd to allow weighting of sites with lots of data versus sites with few data.
+The most appropriate approach would allow us to use the information across many sites when we have many observations. To do so, a hierarchical approach is necessary. Also, there is a fundamental difference between the estimand in the Extreme Value Theory (EVT) models used below and the data we have available. The EVT models are using just the maximum values observed across the sampling years to estimate the largest size -- so we are only using something like 3-15 data points. Alternatively, we can try to use all the size information to estimate the maximum body size. Either way, with the data in hand we want to maximize the information we can extract from it.
 
-From here, we recognize that the upper body size is something we are unlikely to observe and is very likely dependent on the sampling effort in terms of years of sampling. So to estimate this and characterize the uncertainty, for each draw the model performs 20 posterior predictive simulations and estimates the max body size under a standard 'effort'. 
+There are multiple aspects we need to account for 1) differences in maximum attainable size among sites and 2) sampling processes. Pt. 1 is the values we are interested in. Pt. 2 encompasses all the things we need to account for including, a) different efforts (i.e. years) among taxa and sites, b) three sampling dates across the year, c) differing densities of a taxa across sites, d) binned structure of the data, e) inefficient sampling of some sizes. 
 
-Below, I test a simulated data set with the negative binomial count model against the models in `fishmax`. I deliberately choose a low value for the site with 1 sample to determine the effect of the pooling. This allows us to see that the model is performing as expected and estimating reasonable values. I also compare the maximum observed body size from sampling 100,000 individuals from the distributions to see expected values with extensive sampling of a distribution
+These sampling processes each come with additional considerations 1) first, we need to account for the binned structure ( d) )because this changes the data likelihood and how much information we have about the organism body size distribution. 2) We have inefficient sampling ( e) ), in the lower size classes in particular. This means we don't capture these individuals as frequently as we expect and this influences a specific part of the body size distribution, the lower part. This will also influence different summary statistics (e.g., mean, median, sd), but may have less influence on the upper quantiles depending on how we set up the model. We also have only samples combined across mulitple sampling dates in a year ( b) ). This may lead to multi-modal distributions in the data, rather than a continuous size spectrum. For each of these we had different modeling approaches--explicitly modeling capture efficiency using Morin and colleagues [-@morin2004] to 'correct' abundances of small size classe, and using a modeling distribution that can account for multi-modality in the body size distribution and still estimate the values of interest. 3) The other considerations ( a) & c) ), which we can address with the hierarchical structure of the model to employ partial pooling across sites. 
 
-<details>
+We test different model estimates using simulated data to test differences. Model testing is expanded in "Model Testing" page.
 
-```{r simulate-multisite data, echo=TRUE, eval = TRUE, message = FALSE}
-## set the simulation parameters
-simPars = data.frame(site = c('a','b','c','d','e'),
-                     mu = c(10,8,7.8, 3, 9.5),
-                     sigma = c(1.0,1.2,1.5,0.5,1.8),
-                     k = c(4,3,3,1,2),
-                     stringsAsFactors = FALSE)
-                     
-simPars$n = list(c(100,150,200,110),
-                           c(100,200,210),
-                           c(500,600,700),
-                           c(50),
-                           c(200,220))
-
-# show histograms of body size distributions for 10,000 individuals
-simList = mapply(FUN = truncnorm::rtruncnorm,mean = c(10,8,7.8, 3, 9.5),sd = c(1.0,1.2,1.5,0.5,1.8),
-                 MoreArgs = list(n = 1e5,
-                                 a = 0))
-# plot the distributions
-par(mfrow = c(2,3))
-apply(simList,2,function(x) invisible(hist(x)))
-
-## simulate the sampling process and spit out in stan_data format
-sim = simulation(simPars = simPars, seed = 1312)
-
-# aggregate to test the simulated observations
-# add the max values observed from 10,000 inds for a sanity check
-
-simAgg = do.call(
-  data.frame,
-  aggregate(
-    x ~ site,
-    data = sim$observations,
-    FUN = function(z) {
-      c(
-        mean = mean(z),
-        sd = sd(z),
-        min = min(z),
-        max = max(z)
-        )
-    }
-    )
-  ) %>% 
-  bind_cols(
-    data.frame(
-    x.mean.1e5 = apply(simList,2,mean),
-    x.sd.1e5 = apply(simList,2,sd),
-    x.max.1e5 = apply(simList,2,max)
-    )
-  ) 
-
-simAgg %>% 
-  knitr::kable(., caption = "Table 1. Comparisons of distribution moments from simulated sampling data and 1e5 draws from truncated normal.")
-
-```
-
-The `x.max` from the 100,000 individual simulations have a slightly larger max as expected but everything is pretty close, as expected.
-
-</details>
-
-```{r test-hier_nb, warning=FALSE, message=FALSE, eval = TRUE, echo=TRUE}
-
-## pull out the stan_data from sim and add the reference sample #
-stan_data = sim$stan_data
-stan_data$k_ref = 20L
-stan_data$mu_upper <- 200
-stan_data$sigma_upper <- 100
-stan_data$prior_only = 0
-
-# compile stan model
-# mod = cmdstan_model(here('code/stan/neg-bin_count_pooled.stan')) #old nb model before stabilizing priors and initialization values to help sampling
-mod = cmdstan_model(here('code/stan/hierarchical_nb_max_size_stable.stan'))
-
-init_list= make_init_list_stable(stan_data, chains = 4, seed = 1312)
-# fit the model
-negbin_fit = mod$sample(
-    data = stan_data,
-    seed = 1312,
-    chains = 4,
-    parallel_chains = 4,
-    init = init_list,
-    iter_warmup = 1000,
-    iter_sampling = 1000,
-    adapt_delta = 0.95,
-    max_treedepth = 12,
-    refresh = 0
-  )
-
-parameter_summary <- negbin_fit$summary()
-
-vars = 'max_ref_rep'
-slimSumm =  parameter_summary[grepl(vars, parameter_summary$variable),c('mean','sd','q5','q95')] %>% 
-  setNames(., nm = c('maxL_mean','maxL_sd','maxL_q5','maxL_q95'))
-
-bind_cols(sim$site_truth[,c(1:2,5:6)], slimSumm) %>% 
-  bind_cols(
-    data.frame(
-    maxL_1e5 = apply(simList,2,max)
-    )
-  ) %>% 
-  knitr::kable(., caption = "Table 2. Negative binomial count model estimates of maximum body size compared to simulation with 1e5. 'site' and 'site_id' represent the site identifiers, 'k_observed' is the number of samples, 'mean_n_observed' is the average individuals in each samples, 'maxL_*' represents the modeled estimates of the maximum body size, and 'maxL_1e5' is the maximum body size observed in 1e5 simulations from truncated normal distribution.")
-```
-
-We see in the modeled estimates compared to the simulated observation, most estimates are lower because we sampled fewer individuals. One exception is site 'd' which has been 'pulled up' from the partial pooling as we intended, we see a `r (5.19-4.854)/4.854*100`% change from the simulation due to the partial-pooling. 
-
-We can check the $L_{max}$ estimates from the EVT models and compare using one site. Let's check this for one site. I will not choose the site that we purposefully did a deviation.
-
-```{r test-gvt, eval = TRUE, echo = TRUE}
-
-# select just one site
-site_a = sim$observations %>% 
-  dplyr::filter(site == 'a') %>% 
-  named_group_split(event_within_site) %>% 
-  map(~dplyr::select(.x, x) %>% unlist)
-
-fit = fit_max_model(site_a, refresh = 0)
-
-get_max(fit, ci = 0.95) %>% 
-  bind_rows(
-    parameter_summary[which(parameter_summary$variable == 'max_ref_rep[1]'),
-                  c('median', 'q5','q95')] %>% 
-    dplyr::mutate(model = 'negbin') %>% 
-    dplyr::select(model, `max_fit.50%` = median, `max_lwr.2.5%` = q5, `max_upr.97.5%` = q95)
-  ) %>% 
-  bind_rows(
-    data.frame(
-      model = 'sim',
-      'max_fit.50%' = unlist(simAgg[1, c('x.max')]),
-      'max_lwr.2.5%' = NA,
-      'max_upr.97.5%' = NA,
-      check.names = FALSE)
-    ) %>% 
-  knitr::kable(.)
-
-```
-
-These simulations and model comparisons show that we do a pretty good job of capturing the signal in this site and it doesn't matter much which model is used for this site that is sampled fairly well. We can't fit a model with `fishmax` to site 'd' because we only have a single sample, but we had no problem with the hierarchical model to get an estimate for this site.
+Here, we move forward with the multinomial binned likelihood model as this best captures the data structure we have.
 
 ## Prepare NEON data for analysis
 

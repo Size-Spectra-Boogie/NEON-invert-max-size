@@ -1,6 +1,7 @@
 ---
 title: "model-troubleshooting"
 format: html
+editor: source
 ---
 
 ## Introduction
@@ -151,11 +152,11 @@ A few models still have divergences. I will troubleshoot these but I wanted to w
 
 ## Max estimates are very high in some cases
 
-Initial exploration of the model results suggest that there are some instances when site-level maximums of some species are very unreasonably high. E.g, 20 mm when the largest observed individual across all sites is 11 mm after we sample. 
+Initial exploration of the model results suggest that there are some instances when site-level maximums of some species are very unreasonably high. E.g, 20 mm when the largest observed individual across all sites is 11 mm after we sample.
 
-So I went about reassessing this model to do two things 1) actually account for the binned structure of the data and 2) build in upper bounds on the truncated normal that are flexible, but also do not put probability in mass ranges that are very unlikely and biologically impossible. This does two important things the original model failed to do. First, the artificial jittering created artificial variability when we can simply account for the bin structure. Second, it 
+So I went about reassessing this model to do two things 1) actually account for the binned structure of the data and 2) build in upper bounds on the truncated normal that are flexible, but also do not put probability in mass ranges that are very unlikely and biologically impossible. This does two important things the original model failed to do. First, the artificial jittering created artificial variability when we can simply account for the bin structure. Second, it
 
-Here is an example using a well sampled example. The current maximum estimates for this taxa using the lower-truncated Normal are >20mm. But the maximum observed size across >90k individuals is 11mm.
+Here is an example using a well sampled example. The current maximum estimates for this taxa using the lower-truncated Normal are \>20mm. But the maximum observed size across \>90k individuals is 11mm.
 
 ```{r calibaetis-example}
 
@@ -170,6 +171,8 @@ CALSP14 %>%
 x = macroTaxaStanData[[1]] %>% pluck('x')
 
 ```
+
+## Binned multi-nomial model with sample-efficiency correction
 
 ```{r new-binned-mod}
 
@@ -267,7 +270,7 @@ macroTaxaList[[1]] %>%
   hist
 ```
 
-We have moved from the truncated normal because of poor behavior with the binned data structure and the 
+We have moved from the truncated normal because of poor behavior with the binned data structure and the
 
 ```{r ln-softmax-binned-model}
 
@@ -330,7 +333,7 @@ macroTaxaList[['UVASP']] %>%
   hist
 ```
 
-The full diagnostics samples a number of other quantities we might be interested, but these are mostly model parameters. Of interest would be the `y_rep*` variables that desribe the expected samples count for each bin. In the above example we only have a single site with a single observation of 11 individuals in sizeclass bin 1mm. The estimated mean size of this taxa is `r full_diagnostics %>% dplyr::filter(grepl('size_mean', variable) %>% select(mean) %>% round(3)` [`r full_diagnostics %>% dplyr::filter(grepl('size_mean', variable) %>% select(q5) %>% round(3)` - `r full_diagnostics %>% dplyr::filter(grepl('size_mean', variable) %>% select(q95) %>% round(3)` 95% Credibility Interval]. 
+The full diagnostics samples a number of other quantities we might be interested, but these are mostly model parameters. Of interest would be the `y_rep*` variables that desribe the expected samples count for each bin. In the above example we only have a single site with a single observation of 11 individuals in sizeclass bin 1mm. The estimated mean size of this taxa is `r full_diagnostics %>% dplyr::filter(grepl('size_mean', variable) %>% select(mean) %>% round(3)` \[`r full_diagnostics %>% dplyr::filter(grepl('size_mean', variable) %>% select(q5) %>% round(3)` - `r full_diagnostics %>% dplyr::filter(grepl('size_mean', variable) %>% select(q95) %>% round(3)` 95% Credibility Interval\].
 
 ### Extract model fits
 

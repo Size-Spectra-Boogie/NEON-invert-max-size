@@ -1,0 +1,625 @@
+---
+title: "model-testing"
+format: html
+editor: source
+---
+
+<link rel="stylesheet" type="text/css" href="http://cdn.datatables.net/1.10.5/css/jquery.dataTables.min.css">
+<script src="http://code.jquery.com/jquery-2.1.2.min.js"></script>
+<script src="http://cdn.datatables.net/1.10.5/js/jquery.dataTables.min.js"></script>
+<script type="text/javascript">
+         $(document).ready(function() {
+             $(".dtable").DataTable();
+         } );
+</script>
+
+# Introduciton
+
+The most appropriate approach would be to allow us to use the information across many sites when we have many observations. To do so, a hierarchical approach is necessary. Also, there is a fundamental difference between the estimand in the Extreme Value Theory (EVT) models used below and the data we have available. The EVT models are using just the maximum values observed across the sampling years to estimate the largest size -- so we are only using something like 3-15 data points. Alternatively, we can try to use all the size information to estimate the maximum body size.
+
+The most appropriate approach would allow us to use the information across many sites when we have many observations. To do so, a hierarchical approach is necessary. Also, there is a fundamental difference between the estimand in the Extreme Value Theory (EVT) models used below and the data we have available. The EVT models are using just the maximum values observed across the sampling years to estimate the largest size -- so we are only using something like 3-15 data points. Alternatively, we can try to use all the size information to estimate the maximum body size. Either way, with the data in hand we want to maximize the information we can extract from it.
+
+There are multiple aspects we need to account for 1) differences in maximum attainable size among sites and 2) sampling processes. Pt. 1 is the values we are interested in. Pt. 2 encompasses all the things we need to account for including, a) different efforts (i.e. years) among taxa and sites, b) three sampling dates across the year, c) differing densities of a taxa across sites, d) binned structure of the data, e) inefficient sampling of some sizes. 
+
+These sampling processes each come with additional considerations 1) first, we need to account for the binned structure ( d) )because this changes the data likelihood and how much information we have about the organism body size distribution. 2) We have inefficient sampling ( e) ), in the lower size classes in particular. This means we don't capture these individuals as frequently as we expect and this influences a specific part of the body size distribution, the lower part. This will also influence different summary statistics (e.g., mean, median, sd), but may have less influence on the upper quantiles depending on how we set up the model. We also have only samples combined across mulitple sampling dates in a year ( b) ). This may lead to multi-modal distributions in the data, rather than a continuous size spectrum. For each of these we had different modeling approaches--explicitly modeling capture efficiency using Morin and colleagues [-@morin2004] to 'correct' abundances of small size classe, and using a modeling distribution that can account for multi-modality in the body size distribution and still estimate the values of interest. 3) The other considerations ( a) & c) ), which we can address with the hierarchical structure of the model to employ partial pooling across sites. 
+
+We test different model estimates using simulated data to test differences. We also compare the estimates for the NEON data with each model choice.
+
+<details>
+<summary> Click here for simulation details</summary>
+
+```{r simulate-multisite data, echo=TRUE, eval = FALSE, message = FALSE}
+## set the simulation parameters
+simPars = data.frame(site = c('a','b','c','d','e'),
+                     mu = c(10,8,7.8, 3, 9.5),
+                     sigma = c(1.0,1.2,1.5,0.5,1.8),
+                     k = c(4,3,3,1,2),
+                     stringsAsFactors = FALSE)
+                     
+simPars$n = list(c(100,150,200,110),
+                           c(100,200,210),
+                           c(500,600,700),
+                           c(50),
+                           c(200,220))
+
+# show histograms of body size distributions for 100,000 individuals
+simList = mapply(FUN = truncnorm::rtruncnorm,mean = c(10,8,7.8, 3, 9.5),sd = c(1.0,1.2,1.5,0.5,1.8),
+                 MoreArgs = list(n = 1e5,
+                                 a = 0))
+# plot the distributions
+par(mfrow = c(2,3))
+apply(simList,2,function(x) invisible(hist(x)))
+
+## simulate the sampling process and spit out in stan_data format
+sim = simulation(simPars = simPars, seed = 1312)
+# saveRDS(sim, here('data/simulations/sim-test.rds'))
+```
+
+```{r sim-agg, eval = TRUE, echo=FALSE}
+# aggregate to test the simulated observations
+# add the max values observed from 10,000 inds for a sanity check
+sim = readRDS(here('data/simulations/sim-test.rds'))
+
+simAgg = do.call(
+  data.frame,
+  aggregate(
+    x ~ site,
+    data = sim$observations,
+    FUN = function(z) {
+      c(
+        mean = mean(z),
+        sd = sd(z),
+        min = min(z),
+        max = max(z)
+        )
+    }
+    )
+  ) %>% 
+  bind_cols(
+    data.frame(
+    x.mean.1e5 = apply(simList,2,mean),
+    x.sd.1e5 = apply(simList,2,sd),
+    x.max.1e5 = apply(simList,2,max)
+    )
+  ) 
+
+simAgg %>% 
+  knitr::kable(., caption = "Table 1. Comparisons of distribution moments from simulated sampling data and 1e5 draws from truncated normal.")
+
+```
+
+The `x.max` from the 100,000 individual simulations have a slightly larger max but everything is pretty close, as expected.
+
+</details>
+
+## Multi-nomial
+
+I put together a hierarchical model in stan that uses a multi-nomial count model to parameterize the entire body size distribution as 1 or more mixtures and then estimates the upper body size quantiles (95%, 99%). This gets around estimating an unbounded upper bound and the difficulty in characterizing the upper tail of the size distribution. This model uses partial-pooling across sites to estimate the body size distribution from a binned log-normal multi-nomial likelihood so we can use information across many sites to inform poorly sampled sites. It also specifically accounts for inefficient sampling of size classes based on the mesh size (250 $\mu m$) and the retention probability based on Morin and colleagues [-@morin2004] The model estimates the expected density or counts for each site along with the mean and standard deviation of the truncated normal. The site-level mean and sd of the truncated normal is estimated with hyperpriors for the pooled mean and sd to allow weighting of sites with lots of data versus sites with few data.
+
+```{r test-hier-mn, warning=FALSE, message=FALSE, eval = FALSE, echo=TRUE}
+
+# read in the simulation data and bin 
+sim = readRDS(here('data/simulations/sim-test.rds')) 
+
+sim_bin = sim %>% 
+  pluck('observations') %>% 
+  dplyr::mutate(sizeClass = round(x),
+                acceptedTaxonID = "sppX") %>% 
+  dplyr::count(acceptedTaxonID, event_id, event_within_site, site, site_id, sizeClass) %>% 
+  dplyr::rename(siteID = site_id, collectYear = event_within_site, no_m2 = n ) %>% 
+  make_retention_grid_stan_data(
+  bin_data = .,
+  event_data = NULL,
+  morin_link = "logistic",
+  prior_only = 0L
+  )
+## pull out the stan_data from sim
+stan_data = sim_bin$stan_data
+
+
+init_list= make_retention_grid_init(
+  stan_data = stan_data,
+  chains = 4L,
+  seed = 1312
+)
+
+multi_mod_ln_slim = cmdstan_model(here('code/stan/hierarchical_ln_max_size_binned_slim.stan'))
+
+# fit the model
+mn_fit = multi_mod_ln_slim$sample(
+        data = stan_data,
+        seed = 1312,
+        chains = 4L,
+        parallel_chains = 4L,
+        
+        init = init_list,
+        
+        iter_warmup = 1500,
+        iter_sampling = 1000,
+        adapt_delta = 0.99,
+        max_treedepth = 12,
+        refresh = 0
+)
+mn_fit$save_object(file = here('data/simulations/mn-sim-fit.rds'))
+```
+
+```{r mn-summary, echo=TRUE, eval=TRUE}
+mn_fit = readRDS(here('data/simulations/mn-sim-fit.rds'))
+parameter_summary = mn_fit$summary()
+
+vars = paste('size_q95', collapse = "|")
+slimSumm =  parameter_summary[grepl(vars, parameter_summary$variable),c('variable','mean', 'median','sd','q5','q95')] %>% 
+  setNames(., nm = c('variable','maxL_mean','maxL_median','maxL_sd','maxL_q5','maxL_q95')) %>% 
+  dplyr::mutate(site_id = as.integer(gsub("\\w+\\[(\\d{1,2})\\]", "\\1", variable))) %>% 
+  dplyr::mutate(variable = gsub("(\\w+)\\[\\d{1,2}\\]", "\\1", variable)) %>% 
+  left_join(.,sim_bin$mapping$site[,c(1:2)], by = 'site_id') %>% 
+  dplyr::mutate(site = letters[as.integer(siteID)]) %>% 
+  dplyr::select(-variable, -site_id, -siteID) %>% 
+  merge(sim$site_truth[,c(2,5:6)],., by = 'site') %>%
+  bind_cols(
+    data.frame(
+    maxL_1e5 = apply(simList,2,max)
+    )
+  )
+
+slimSumm %>% 
+  knitr::kable(., caption = "Table 2. Negative binomial count model estimates of maximum body size compared to simulation with 1e5. 'site' and 'site_id' represent the site identifiers, 'k_observed' is the number of samples, 'mean_n_observed' is the average individuals in each samples, 'maxL_*' represents the modeled estimates of the maximum body size, and 'maxL_1e5' is the maximum body size observed in 1e5 simulations from truncated normal distribution.")
+```
+
+We see in the modeled estimates compared to the simulated observation, most estimates are lower because we sampled fewer individuals. One exception is site 'd' which has been 'pulled up' from the partial pooling as we intended, we see a `r (6.13-5.29)/5.29*100`% change from the simulation due to the partial-pooling. 
+
+We can check the $L_{max}$ estimates from the EVT models and compare using one site. Let's check this for one site. I will not choose the site that we purposefully did a deviation.
+
+```{r test-gvt-mn, eval = TRUE, echo = TRUE}
+
+# select just one site
+site_a = sim$observations %>% 
+  dplyr::filter(site == 'a') %>% 
+  named_group_split(event_within_site) %>% 
+  map(~dplyr::select(.x, x) %>% unlist)
+
+# debugonce(fit_max_model)
+fit = fit_max_model(site_a, refresh = 0)
+
+get_max(fit, ci = 0.95) %>% 
+  bind_rows(
+    slimSumm[which(slimSumm$site == 'a'),
+                  c('maxL_median', 'maxL_q5','maxL_q95')] %>% 
+    dplyr::mutate(model = 'mn') %>% 
+    dplyr::select(model, `max_fit.50%` = maxL_median, `max_lwr.2.5%` = maxL_q5, `max_upr.97.5%` = maxL_q95)
+  ) %>% 
+  bind_rows(
+    data.frame(
+      model = 'sim',
+      'max_fit.50%' = unlist(simAgg[1, c('x.max')]),
+      'max_lwr.2.5%' = NA,
+      'max_upr.97.5%' = NA,
+      check.names = FALSE)
+    ) %>% 
+  knitr::kable(.)
+
+```
+
+These simulations and model comparisons show that we do a pretty good job of capturing the signal in this site. However, the multi-nomial model is underestimating the maximum size (95%) by about `r round((13.35959-11.51343)/13.35959*100,1)`%. We can't fit a model with `fishmax` to site 'd' because we only have a single sample, but we had no problem with the hierarchical model to get an estimate for this site.
+
+## Negative binomial
+
+I put together a hierarchical model in stan that uses a negative binomial count model to parameterize the entire body size distribution and then uses posterior predictive simulations to estimate the maximum body size observed using a standardized 'effort'. This model uses partial-pooling across sites to estimate the body size distribution from a truncated normal distribution so we can use information across many sites to inform poorly sampled sites. The model estimates the expected density or counts for each site along with the mean and standard deviation of the truncated normal. The site-level mean and sd of the truncated normal is estimated with hyperpriors for the pooled mean and sd to allow weighting of sites with lots of data versus sites with few data.
+
+From here, we recognize that the upper body size is something we are unlikely to observe and is very likely dependent on the sampling effort in terms of years of sampling. So to estimate this and characterize the uncertainty, for each draw the model performs 20 posterior predictive simulations and estimates the max body size under a standard 'effort'. 
+
+Below, I test a simulated data set with the negative binomial count model. Further, we know this model is mis-specified for the data because it does not account for the binned data structure, but rather random samples, for each bin based on bin abundance, a uniform distribution bounded by the size class bins edges. There are a number of examples in the NEON data that 
+
+```{r test-hier_nb, warning=FALSE, message=FALSE, eval = TRUE, echo=TRUE}
+
+sim = readRDS(here('data/simulations/sim-test.rds'))
+## pull out the stan_data from sim and add the reference sample #
+stan_data = sim$stan_data
+stan_data$k_ref = 20L
+stan_data$mu_upper <- 200
+stan_data$sigma_upper <- 100
+stan_data$prior_only = 0
+
+# compile stan model
+# mod = cmdstan_model(here('code/stan/neg-bin_count_pooled.stan')) #old nb model before stabilizing priors and initialization values to help sampling
+mod = cmdstan_model(here('code/stan/hierarchical_nb_max_size_stable.stan'))
+
+init_list= make_init_list_stable(stan_data, chains = 4, seed = 1312)
+# fit the model
+negbin_fit = mod$sample(
+    data = stan_data,
+    seed = 1312,
+    chains = 4,
+    parallel_chains = 4,
+    init = init_list,
+    iter_warmup = 1000,
+    iter_sampling = 1000,
+    adapt_delta = 0.95,
+    max_treedepth = 12,
+    refresh = 0
+  )
+
+parameter_summary <- negbin_fit$summary()
+
+vars = 'max_ref_rep'
+slimSumm =  parameter_summary[grepl(vars, parameter_summary$variable),c('mean','sd','q5','q95')] %>% 
+  setNames(., nm = c('maxL_mean','maxL_sd','maxL_q5','maxL_q95'))
+
+bind_cols(sim$site_truth[,c(1:2,5:6)], slimSumm) %>% 
+  bind_cols(
+    data.frame(
+    maxL_1e5 = apply(simList,2,max)
+    )
+  ) %>% 
+  knitr::kable(., caption = "Table 2. Negative binomial count model estimates of maximum body size compared to simulation with 1e5. 'site' and 'site_id' represent the site identifiers, 'k_observed' is the number of samples, 'mean_n_observed' is the average individuals in each samples, 'maxL_*' represents the modeled estimates of the maximum body size, and 'maxL_1e5' is the maximum body size observed in 1e5 simulations from truncated normal distribution.")
+```
+
+We see in the modeled estimates compared to the simulated observation, most estimates are lower because we sampled fewer individuals. One exception is site 'd' which has been 'pulled up' from the partial pooling as we intended, we see a `r (5.19-4.854)/4.854*100`% change from the simulation due to the partial-pooling. 
+
+We can check the $L_{max}$ estimates from the EVT models and compare using one site. Let's check this for one site. I will not choose the site that we purposefully did a deviation.
+
+```{r test-gvt, eval = TRUE, echo = TRUE}
+
+# select just one site
+site_a = sim$observations %>% 
+  dplyr::filter(site == 'a') %>% 
+  named_group_split(event_within_site) %>% 
+  map(~dplyr::select(.x, x) %>% unlist)
+
+fit = fit_max_model(site_a, refresh = 0)
+
+get_max(fit, ci = 0.95) %>% 
+  bind_rows(
+    parameter_summary[which(parameter_summary$variable == 'max_ref_rep[1]'),
+                  c('median', 'q5','q95')] %>% 
+    dplyr::mutate(model = 'negbin') %>% 
+    dplyr::select(model, `max_fit.50%` = median, `max_lwr.2.5%` = q5, `max_upr.97.5%` = q95)
+  ) %>% 
+  bind_rows(
+    data.frame(
+      model = 'sim',
+      'max_fit.50%' = unlist(simAgg[1, c('x.max')]),
+      'max_lwr.2.5%' = NA,
+      'max_upr.97.5%' = NA,
+      check.names = FALSE)
+    ) %>% 
+  knitr::kable(.)
+
+```
+
+These simulations and model comparisons show that we do a pretty good job of capturing the signal in this site and it doesn't matter much which model is used for this site that is sampled fairly well. We can't fit a model with `fishmax` to site 'd' because we only have a single sample, but we had no problem with the hierarchical model to get an estimate for this site.
+
+## Prepare NEON data for analysis
+
+```{r full-NEON-analysis, eval=FALSE, echo=TRUE}
+# list organized by each taxa group, acceptedTaxonID
+macroTaxaList = readRDS(here('data/derived-data/macroTaxaList.rds'))
+
+# get rough mean sizes quickly to set priors on upper mu bound
+means = macroTaxaList %>% 
+  map(~.x %>% select(sizeClass) %>% unlist %>%  mean(., na.rm = TRUE)) %>% 
+  bind_rows %>% unlist
+hist(log10(means))
+mean(log(means));mean(means);max(means)
+# [1] 1.323187
+# [1] 5.177346
+# [1] 115
+sds = macroTaxaList %>% 
+  map(~.x %>% select(sizeClass) %>% unlist %>%  sd(., na.rm = TRUE)) %>% 
+  bind_rows %>% unlist
+hist(log10(sds))
+mean(sds, na.rm = TRUE);max(sds, na.rm = TRUE)
+#[1] 2.194067
+#[1] 26.71454
+# we have some means above 100
+# we set mu_upper to 400 and sigma_upper to 200
+
+# convert the taxa sample lists in the correct format for the negative binomial model
+macroTaxaList %>% 
+  future_map(~make_stanData_taxa(.x),
+             .options = furrr_options(seed= 1312)
+      ) %>% 
+  # this is suprisingly a large file. saved to ignore/ folder.
+saveRDS(here('ignore/macroTaxaStanData.rds'))
+
+# make a site index list to map back to model output to sites
+macroTaxaList %>% 
+  future_map(~make_site_index(.x),
+              .options = furrr_options(seed= 1312)) %>% 
+  saveRDS(., here('ignore/macroTaxaSiteIndex.rds'))
+
+```
+
+```{r run-negbin-taxa, echo=TRUE, eval=FALSE}
+
+# set a future plan for multisession fitting if one isn't already set
+if(!inherits(plan(), "multisession")){
+  if(parallelly::availableCores() == 24)
+    future::plan("multisession", workers = 10, gc = TRUE)
+  } else{
+    future::plan("multisession", workers = 6, gc = TRUE)
+}
+
+# compile stan models
+## model for multi-site taxa
+mod = cmdstan_model(here('code/stan/hierarchical_nb_max_size_stable.stan'))
+## model for taxa with only observations at a single site
+single_mod = cmdstan_model(here('code/stan/single_nb_max_size_stable.stan'))
+
+## load in stan data list
+macroTaxaStanData = readRDS(here('ignore/macroTaxaStanData.rds')) 
+
+# reorder macroTaxaStanData by most rows to fewest for distributing future work
+macroTaxaStanData = macroTaxaStanData[order(sapply(macroTaxaStanData, function(x) x$n_obs), decreasing = TRUE)]
+## set the taxa names for naming models
+taxaNames = names(macroTaxaStanData)
+
+## based on the upper bounds of the initialization values, we set an upper bound of 4.5 for the cross site count variation. This corresponds to ~55x variation in counts among sites at 1SD.
+## posterior checks will need to be done on this variable to ensure we are not getting a lot 
+## of mass in this upper bound and also some prior sensitivity check to ensure we are not 
+## massively impacting inferences with this very large intersite-count difference prior.
+### run tests with one model to test overwrite
+# stan_data = macroTaxaStanData[["CHISP8"]]
+# y = "CHISP8"
+# debugonce(fit_negbin_named)
+# fit_negbin_named(stan_data = stan_data, taxaName = y, rerun = TRUE, overwrite = FALSE)
+# z = CAESP5_negbin$summary()
+
+# fit the models. This will overwrite existing models if overwrite = TRUE. These are saved in the ignore/ folder
+# future_walk2(
+#   macroTaxaStanData,
+#   taxaNames,
+#   ~fit_negbin_named(stan_data = .x, taxaName = .y, rerun = TRUE, overwrite = FALSE),
+#   .options = furrr_options(seed = 1312, scheduling = Inf)
+#   )
+
+```
+
+#### Note of caution
+
+Some of the checking of model behavior is outlined in the `model-troubleshooting` file to keep this clean. The majority of this was dealing with divergences when trying to fit a hiearchical model to single-site data (duh!), but a few others need to be checked to ensure good inferences. 
+
+### Checking model results
+
+```{r prep-data-extract, echo = TRUE, eval = FALSE}
+# load in the model files lists
+nbModFiles = list.files(here('ignore/models/'), '.rds', full.names = TRUE)
+
+# extract taxa names from model lists
+taxaNames = nbModFiles %>% 
+  map(~sapply(strsplit(sapply(strsplit(.x, "/"),"[",10),"_"), "[", 1)) %>% 
+  unlist
+
+# load in site index for each taxa
+macroTaxaSiteIndex = readRDS(here('ignore/macroTaxaSiteIndex.rds'))
+# set the model index order to each taxa
+macroTaxaSiteIndex = macroTaxaSiteIndex[taxaNames]
+
+## read in the taxonomy data to join with index
+macroTaxonomy = readRDS(here('data/NEON-macros-tax.rds'))
+
+# read in length-mass regression  
+lwCoefsDf = read.csv(here('data/macro_lw_coeffs.csv')) #%>% 
+  # add in others that don't have l-m below
+
+# add this to the macroTaxonomy to read in later.
+# debugonce(LW_coef)
+macroTaxonomy = macroTaxonomy %>% 
+  LW_coef(., lw_coef = lwCoefsDf, percent = TRUE)
+# read in and clean the site lat-long data to merge with index
+siteCoords = read.csv(here('data/site_latlong.csv')) %>% 
+  bind_rows(data.frame(
+    site = c('BLWA', 'FLNT', 'LIRO','PRLA','SUGG','BARC','PRPO','CRAM','TOOK','TOMB'),
+    lat = c(32.54153,31.18542,45.99827,47.15909,29.68778,29.67598,47.12984,46.20967,68.63069,31.85343),
+    long = c(-87.79815,-84.43740,-89.70477,-99.11388,-82.01775,-82.00841,-99.25315,-89.47369,-149.61064,-88.15887)
+  ))
+  
+# here is the function to prepare the full data frame with estimated maximum mass. This saves the table so we don't have rerun this every time. Takes 20min (too long) to run sequentially.
+if(rerun_data){
+  if(!inherits('multisession', plan())){
+    future::plan('multisession', workers = 10, gc = TRUE)
+  }
+future_pmap(
+  list(nbModFiles, taxaNames, macroTaxaSiteIndex),
+  ~extract_max(filePath = ..1, names = ..2, siteIndex = ..3)
+  ) %>%
+  bind_rows() %>% 
+  dplyr::select(-siteID) %>% 
+  dplyr::select(acceptedTaxonID, site = siteName, everything()) %>% 
+  dplyr::mutate(site = trimws(as.character(site))) %>% 
+  right_join(macroTaxonomy, ., by = 'acceptedTaxonID') %>% 
+  left_join(., siteCoords, by = 'site') %>% 
+  saveRDS(here('data/derived-data/macroTaxaSiteDf.rds'))
+} else{
+  macroTaxaSiteDf = readRDS(here('data/derived-data/macroTaxaSiteDf.rds'))
+}
+
+```
+
+We can extract all the model estimates and merge with site and taxonomy data to look at patterns.
+
+```{r get-nb-data, echo=TRUE, eval= TRUE}
+# use the est_dw() function to convert length estimates to mass 
+macroTaxaSiteDf =readRDS(here('data/derived-data/macroTaxaSiteDf.rds')) %>%
+  mutate(across(c(mean, median, sd, q5, q95),
+                ~est_dw_simp(.x, a,b,formula_type),
+                .names = "dw_{.col}")) %>% 
+  ## do some fixes of taxa with missing information
+  dplyr::mutate(genus = case_when(scientificName == 'Monophylax mono' ~ 'Monophylax',
+                                  scientificName == 'Nanocladius (Plecopterocoluthus) sp.' ~ 'Nanocladius',
+                                  .default = genus)) %>% 
+  dplyr::mutate(lowestClassification = case_when(
+    stringr::str_detect(scientificName,'nae') & is.na(genus) & family %in% 'Chironomidae' ~ 'subfamily',
+    stringr::str_detect(scientificName, 'dae', negate = TRUE) & is.na(genus) & family %in% 'Chironomidae' ~ 'tribe',
+    is.na(genus) & family %in% 'Chironomidae' ~ 'family',
+    is.na(subclass) & is.na(order) & is.na(family) & is.na(genus)~ 'class',
+    is.na(order) & is.na(family) & is.na(genus) ~ 'subclass',
+    is.na(family) & is.na(genus) ~ 'order',
+    is.na(genus) ~ 'family',
+    specificEpithet %in% c('sp.','gr.') ~ 'genus',
+    .default = 'species')) %>% 
+  dplyr::select(scientificName, acceptedTaxonID, class, subclass, order, family, genus, specificEpithet, lowestClassification, site, lat, long, variable, dw_mean, dw_median, dw_sd, dw_q5, dw_q95)
+```
+
+This page is for documenting the model checking procedures for the maximum size estimation models. The models were all fit originally using the hierarchical negative binomial model `code/stan/hierarchical_nb_max_size_stable`. With these fits, we identified a number of issues, so we are now working backwards to simpler models. I outline below the steps to keep a record for future.
+
+## Divergent transitions
+
+The original models had \~700, or about 50%, that exhibited divergent transitions after warmup. I should have realized at the outset that we are likely to have many taxa with only a single site, so the hierarchical structure of the model is obviously not appropriate. It turned out that \~400 only have a single site.
+
+```{r id-S-of-one}
+
+macroTaxaStanData = readRDS(here('ignore/macroTaxaStanData.rds')) 
+
+macroTaxaStanData %>% 
+  map_lgl(~.x$S == 1) %>% sum
+
+```
+
+This is a large part of the issue. Which became apparent with the checks below.
+
+### Check models with divergences after sampling
+
+Lots of the models exhibit divergences after warming, most often this is \~1% of transitions, other times if can be up to \~20%. Below we go through a diagnostic procedure to better characterize where these divergences occur and hopefully we can better specify/constrain the model to eliminate this issue.
+
+```{r nb-divergences}
+nbFiles = list.files(here('ignore/models/'), '.rds', full.names = TRUE)
+taxaNames = nbFiles %>% 
+  map(~sapply(strsplit(sapply(strsplit(.x, "/"),"[",10),"_"), "[", 1)) %>% 
+  unlist
+nbFiles = setNames(nbFiles, taxaNames)
+# check for # of divergences
+nbDivergences = nbFiles %>% 
+  future_map(~check_divergences(filePath = .x))
+# what is the distribution of divergent #s
+nbDivergences %>% map(~.x %>% pluck('num_diverge') %>% unlist) %>% unlist %>% hist
+# what is maximum # of divergences
+nbDivergences %>% map(~.x %>% pluck('num_diverge') %>% unlist) %>% unlist %>% max
+which(nbDivergences %>% map(~.x %>% pluck('num_diverge') %>% unlist) %>% unlist == 1116)
+#what is the 75-percentile # of divergences
+nbDivergences %>% map(~.x %>% pluck('num_diverge') %>% unlist) %>% unlist %>% quantile(., 0.75)
+
+
+# separate out the models with divergences
+nbDivergentFiles = nbFiles[nbDivergences %>% map(~pluck(.x, 'diverge')) %>% unlist]
+# check with a particularly problematic model
+highDiverge = nbDivergences %>% 
+  map(~.x %>% pluck('num_diverge') %>% unlist) %>% 
+  unlist 
+
+
+divergeStanData = macroTaxaStanData[names(macroTaxaStanData) %in% names(nbDivergentFiles )]
+
+# how many of the divergence taxa have only a single site?
+divergeStanData %>% 
+  map(~.x$S) %>% 
+  unlist %>%
+  keep(~.x == 1) %>% 
+  count()
+# all sites with only 1 site show divergences
+
+# how many of the divergence taxa have only 2 samples?
+divergeStanData %>% 
+  map(~.x$K) %>% 
+  unlist %>% 
+  keep(~.x == 2) %>% 
+  count()
+
+```
+
+To address this issue, we built a simpler single site model as that is the most straightforward way to address this issue. This model is `code/stan/single_nb_max_size_stable.stan`. So with this new approach, I refit just the taxa with observations at only a single site.
+
+```{r refit-S-of-one, eval = FALSE}
+# do a clean load of the stan data to ensure we don't mess anything up
+## I am only loading the single model here to ensure we don't accidentally overwrite a model we don't want to 
+single_mod = cmdstan_model(here('code/stan/single_nb_max_size_stable.stan'))
+
+macroTaxaStanData = readRDS(here('ignore/macroTaxaStanData.rds')) 
+# reorder macroTaxaStanData by most rows to fewest
+macroTaxaStanData = macroTaxaStanData[order(sapply(macroTaxaStanData, function(x) x$n_obs), decreasing = TRUE)]
+taxaNames = names(macroTaxaStanData)
+
+# first identify the locations of the data with only one site
+## convert to logical vector for subsetting stan data and names
+macroTaxaSingleVec = macroTaxaStanData %>% 
+  map_lgl(~.x$S == 1) %>% unlist 
+
+macroTaxaSingleStanData = macroTaxaStanData[macroTaxaSingleVec]
+singleTaxaNames = taxaNames[macroTaxaSingleVec]
+
+# model worked with a single taxa (on only two observations)
+# model worked with a single taxa on 22 observations
+
+# ran into an issue that interrupted the future session after many files were written
+modFiles = list.files(here('ignore/models/'), '.rds', full.names = TRUE)
+fileMeta = file.info(modFiles)
+targetTime = as.POSIXct("2026-07-22 17:54:00 CDT")
+recentFiles = modFiles[fileMeta$mtime > targetTime]
+
+taxaRecent = singleTaxaNames %>% 
+  map_lgl(~grepl(.x, recentFiles, ignore.case = TRUE) %>% sum %>% as.logical)
+
+x = macroTaxaSingleStanData[!taxaRecent]
+y = singleTaxaNames[!taxaRecent]
+# debugonce(fit_negbin_named)
+future_walk2(
+   x,
+   y,
+   ~fit_negbin_named(stan_data  = .x, taxaName = .y, rerun = TRUE, overwrite = TRUE),
+  .options = furrr_options(seed = 1312, scheduling = Inf)
+   )
+# one of the models 3 chains failed need to find this somehow :(
+```
+
+Many models still have divergences.
+
+## Max estimates are very high in some cases
+
+Initial exploration of the model results suggest that there are some instances when site-level maximums of some species are very unreasonably high. E.g, 20 mm when the largest observed individual across all sites is 11 mm after we sample. 
+
+So I went about reassessing this model to do two things 1) actually account for the binned structure of the data and 2) build in upper bounds on the truncated normal that are flexible, but also do not put probability in mass ranges that are very unlikely and biologically impossible. This does two important things the original model failed to do. First, the artificial jittering created artificial variability when we can simply account for the bin structure. Second, it 
+
+Here is an example using a well sampled example. The current maximum estimates for this taxa using the lower-truncated Normal are >20mm. But the maximum observed size across >90k individuals is 11mm.
+
+```{r calibaetis-example}
+
+CALSP14 = macroDWList[grepl('CALSP14', names(macroDWList))] %>% do.call('rbind',.)
+
+CALSP14 %>% 
+  uncount(weights = no_m2) %>% 
+  select(sizeClass) %>% 
+  unlist %>% 
+  hist(.)
+
+x = macroTaxaStanData[[1]] %>% pluck('x')
+
+```
+
+## Hierarchical EVT
+
+### EVT
+
+The models that use EVT are estimating a specific part of the distribution and might better estimate the upper size quantiles with more information from the sites. To accomplish this, we modify the GEV approach used in `fishmax` to allow for observations across many sites and sampling events. This will use partial-pooling for the species location and scale parameters. There is a tight prior placed on the shape parameter across sites as this is likely to have trouble with identifiability. Also, we include the binned structure of the data by marginalizing over the interval contained in the max observed size bin.
+
+```{r GEV-sim-prep}
+# read in the simulation data and bin 
+sim = readRDS(here('data/simulations/sim-test.rds')) 
+
+sim_bin = sim %>% 
+  pluck('observations') %>% 
+  dplyr::mutate(sizeClass = round(x),
+                acceptedTaxonID = "sppX") %>% 
+  dplyr::count(acceptedTaxonID, event_id, event_within_site, site, site_id, sizeClass) %>% 
+  dplyr::rename(siteID = site_id, collectYear = event_within_site, no_m2 = n ) %>% 
+  make_binned_GEV_stan_data(
+    stan_data = .,
+    chains = 4L,
+    seed = 1312
+  )
+
+
+make_binned_GEV_stan_data = function()
+```
+
+### EVT-Gumbel
+
