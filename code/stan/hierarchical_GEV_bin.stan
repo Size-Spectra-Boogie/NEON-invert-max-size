@@ -14,7 +14,7 @@ functions {
     real z = (y - mu) / sigma;
 
     // Gumbel limit
-    if (fabs(xi) < 1e-10) {
+    if (abs(xi) < 1e-10) {
       return -exp(-z);
     }
 
@@ -35,7 +35,7 @@ functions {
        * log(1 + xi*z) / xi approaches z as xi approaches zero.
        * The expansion improves numerical behavior near xi = 0.
        */
-      if (fabs(xi * z) < 1e-6) {
+      if (abs(xi * z) < 1e-6) {
         real a =
           z
           - 0.5 * xi * square(z)
@@ -57,8 +57,8 @@ functions {
    * H(y) = G(y)^r
    */
   real gev_max_interval_lprob(
-      real lower,
-      real upper,
+      real x_lower,
+      real x_upper,
       real mu,
       real sigma,
       real xi,
@@ -67,15 +67,15 @@ functions {
     real log_H_upper;
     real log_H_lower;
 
-    if (upper <= lower) {
+    if (x_upper <= x_lower) {
       return negative_infinity();
     }
 
     log_H_upper =
-      count_ratio * gev_logcdf(upper, mu, sigma, xi);
+      count_ratio * gev_logcdf(x_upper, mu, sigma, xi);
 
     log_H_lower =
-      count_ratio * gev_logcdf(lower, mu, sigma, xi);
+      count_ratio * gev_logcdf(x_lower, mu, sigma, xi);
 
     // Interval entirely below the GEV support
     if (log_H_upper == negative_infinity()) {
@@ -109,7 +109,7 @@ functions {
     real a = -log(w);
 
     // Gumbel limit
-    if (fabs(xi) < 1e-10) {
+    if (abs(xi) < 1e-10) {
       return mu + sigma * a;
     }
 
@@ -120,7 +120,7 @@ functions {
      *
      * Since a = -log(-log(p)), this equals expm1(xi*a)/xi.
      */
-    if (fabs(xi * a) < 1e-6) {
+    if (abs(xi * a) < 1e-6) {
       real q_standardized =
         a
         + 0.5 * xi * square(a)
@@ -144,8 +144,16 @@ data {
    * For max_bin = 2 and bin_width = 1:
    * latent maximum is in (1.5, 2.5].
    */
-  vector<lower=0>[E] max_bin;
-  real<lower=1e-12> bin_width;
+  vector<lower=1>[E] max_bin;
+
+  /* data to scale each taxon
+  *
+  */
+  real taxon_center;
+  real<lower=1e-8> taxon_spread;
+  
+  vector[E] bin_lower;
+  vector[E] bin_upper;
 
   // Individuals contributing to each observed event maximum
   array[E] int<lower=1> n_per_sample;
@@ -161,26 +169,24 @@ data {
 
   // Global parameter priors
   real loc_prior_mean;
-  real<lower=0> loc_prior_sd;
+  real<lower=1e-8> loc_prior_sd;
 
   real log_scale_prior_mean;
-  real<lower=0> log_scale_prior_sd;
+  real<lower=1e-8> log_scale_prior_sd;
 
   real shape_prior_mean;
-  real<lower=0> shape_prior_sd;
+  real<lower=1e-8> shape_prior_sd;
 
   // Priors for among-site standard deviations
-  real<lower=0> tau_loc_prior_sd;
-  real<lower=0> tau_log_scale_prior_sd;
-  real<lower=0> tau_shape_prior_sd;
+  real<lower=1e-8> tau_loc_prior_sd;
+  real<lower=1e-8> tau_log_scale_prior_sd;
+  real<lower=1e-8> tau_shape_prior_sd;
   
   int<lower=0, upper=1> prior_only;
 }
 
 transformed data {
-  vector[E] bin_lower;
-  vector[E] bin_upper;
-
+  
   array[S] int events_per_site;
   vector[S] mean_n_site;
 
@@ -188,11 +194,6 @@ transformed data {
   mean_n_site = rep_vector(0, S);
 
   for (e in 1:E) {
-    bin_lower[e] =
-      fmax(0, max_bin[e] - 0.5 * bin_width);
-
-    bin_upper[e] =
-      max_bin[e] + 0.5 * bin_width;
 
     events_per_site[site_id[e]] += 1;
     mean_n_site[site_id[e]] += n_per_sample[e];
@@ -216,12 +217,12 @@ parameters {
   // Among-site variation
   real<lower=0> tau_loc;
   real<lower=0> tau_log_scale;
-  real<lower=0> tau_shape;
+  // real<lower=0> tau_shape;
 
   // Non-centered site effects
   vector[S] z_loc;
   vector[S] z_log_scale;
-  vector[S] z_shape;
+  // vector[S] z_shape;
 }
 
 transformed parameters {
@@ -229,6 +230,8 @@ transformed parameters {
   vector[S] log_scale_site;
   vector<lower=0>[S] scale_site;
   vector[S] shape_site;
+  // vector[S] shape_site = rep_vector(0,S);
+    // rep_vector(alpha_shape, S);
 
   for (s in 1:S) {
     loc_site[s] =
@@ -241,7 +244,7 @@ transformed parameters {
       exp(log_scale_site[s]);
 
     shape_site[s] =
-      alpha_shape + tau_shape * z_shape[s];
+      alpha_shape;// + tau_shape * z_shape[s];
   }
 }
 
@@ -257,11 +260,12 @@ model {
     log_scale_prior_sd
   );
 
-  alpha_shape ~ normal(
-    shape_prior_mean,
-    shape_prior_sd
-  );
-
+  // alpha_shape ~ normal(
+  //   shape_prior_mean,
+  //   shape_prior_sd
+  // );
+  alpha_shape ~ normal(0,0.1);
+  
   // Half-normal priors because tau parameters are positive
   tau_loc ~ normal(
     0,
@@ -273,15 +277,15 @@ model {
     tau_log_scale_prior_sd
   );
 
-  tau_shape ~ normal(
-    0,
-    tau_shape_prior_sd
-  );
+  // tau_shape ~ normal(
+  //   0,
+  //   tau_shape_prior_sd
+  // );
 
   // Non-centered hierarchy
   z_loc ~ std_normal();
   z_log_scale ~ std_normal();
-  z_shape ~ std_normal();
+  // z_shape ~ std_normal();
 
   // Interval-censored GEV likelihood
   if (prior_only == 0) {
@@ -301,35 +305,29 @@ model {
     );
   }
 }
-  for (e in 1:E) {
-    int s = site_id[e];
-
-    real count_ratio =
-      n_per_sample[e] / n_ref;
-
-    target += gev_max_interval_lprob(
-      bin_lower[e],
-      bin_upper[e],
-      loc_site[s],
-      scale_site[s],
-      shape_site[s],
-      count_ratio
-    );
-  }
 }
 
 generated quantities {
   // Event-level diagnostics
   vector[E] log_lik;
   vector[E] event_max_rep;
+  vector[E] event_max_rep_mm;
 
   /*
    * Standardized site-level outputs:
    * maximum across K_ref site-typical sampling events.
    */
+  vector[S] loc_site_mm;
+  vector[S] scale_site_mm;
+  vector[S] shape_site_mm;
+
   vector[S] site_ref_q50;
   vector[S] site_ref_q95;
   vector[S] site_ref_q99;
+  
+  vector[S] site_ref_q50_mm;
+  vector[S] site_ref_q95_mm;
+  vector[S] site_ref_q99_mm;
 
   /*
    * One posterior-predictive standardized maximum per site.
@@ -337,6 +335,7 @@ generated quantities {
    * distribution, including process and parameter uncertainty.
    */
   vector[S] site_ref_rep;
+  vector[S] site_ref_rep_mm;
 
   // Explicit reference-effort information
   vector[S] site_mean_n;
@@ -369,9 +368,23 @@ generated quantities {
       scale_site[s],
       shape_site[s]
     );
+    
+    event_max_rep_mm[e] = 
+      taxon_center + taxon_spread * event_max_rep[e];
   }
 
   for (s in 1:S) {
+    /*
+     * Back transform bin loc scale, & shape:
+     */
+    loc_site_mm[s] =
+      taxon_center + taxon_spread * loc_site[s];
+
+    scale_site_mm[s] =
+      taxon_spread * scale_site[s];
+
+    shape_site_mm[s] =
+      shape_site[s];
     /*
      * Standardized total sample size:
      *
@@ -418,5 +431,16 @@ generated quantities {
       scale_site[s],
       shape_site[s]
     );
+    
+    site_ref_q50_mm[s] =
+      taxon_center + taxon_spread * site_ref_q50[s];
+
+    site_ref_q95_mm[s] =
+      taxon_center + taxon_spread * site_ref_q95[s];
+
+    site_ref_q99_mm[s] =
+      taxon_center + taxon_spread * site_ref_q99[s];
+    site_ref_rep_mm[s] = 
+      taxon_center + taxon_spread * site_ref_rep[s];
   }
 }

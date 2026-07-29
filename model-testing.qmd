@@ -13,20 +13,41 @@ editor: source
          } );
 </script>
 
+
+```{r init, echo=FALSE, warning=FALSE, message=FALSE}
+here::i_am('full-analysis.qmd') 
+knitr::opts_chunk$set(echo = TRUE, eval = FALSE, warning = FALSE, message = FALSE)
+
+# Define a custom knitr hook for collapsing output
+knitr::knit_hooks$set(fig_collapse=function(before, options, envir) {
+  if (before) {
+    # Opening HTML tags for the collapsible container
+    paste('<details><summary>Click to view figures</summary><div>')
+  } else {
+    # Closing HTML tags
+    paste('</div></details>')
+  }
+})
+
+source(here::here('code/00_init.R'))
+
+```
+
 # Introduciton
 
 The most appropriate approach would be to allow us to use the information across many sites when we have many observations. To do so, a hierarchical approach is necessary. Also, there is a fundamental difference between the estimand in the Extreme Value Theory (EVT) models used below and the data we have available. The EVT models are using just the maximum values observed across the sampling years to estimate the largest size -- so we are only using something like 3-15 data points. Alternatively, we can try to use all the size information to estimate the maximum body size.
 
 The most appropriate approach would allow us to use the information across many sites when we have many observations. To do so, a hierarchical approach is necessary. Also, there is a fundamental difference between the estimand in the Extreme Value Theory (EVT) models used below and the data we have available. The EVT models are using just the maximum values observed across the sampling years to estimate the largest size -- so we are only using something like 3-15 data points. Alternatively, we can try to use all the size information to estimate the maximum body size. Either way, with the data in hand we want to maximize the information we can extract from it.
 
-There are multiple aspects we need to account for 1) differences in maximum attainable size among sites and 2) sampling processes. Pt. 1 is the values we are interested in. Pt. 2 encompasses all the things we need to account for including, a) different efforts (i.e. years) among taxa and sites, b) three sampling dates across the year, c) differing densities of a taxa across sites, d) binned structure of the data, e) inefficient sampling of some sizes. 
+There are multiple aspects we need to account for 1) differences in maximum attainable size among sites and 2) sampling processes. Pt. 1 is the values we are interested in. Pt. 2 encompasses all the things we need to account for including, a) different efforts (i.e. years) among taxa and sites, b) three sampling dates across the year, c) differing densities of a taxa across sites, d) binned structure of the data, e) inefficient sampling of some sizes.
 
-These sampling processes each come with additional considerations 1) first, we need to account for the binned structure ( d) )because this changes the data likelihood and how much information we have about the organism body size distribution. 2) We have inefficient sampling ( e) ), in the lower size classes in particular. This means we don't capture these individuals as frequently as we expect and this influences a specific part of the body size distribution, the lower part. This will also influence different summary statistics (e.g., mean, median, sd), but may have less influence on the upper quantiles depending on how we set up the model. We also have only samples combined across mulitple sampling dates in a year ( b) ). This may lead to multi-modal distributions in the data, rather than a continuous size spectrum. For each of these we had different modeling approaches--explicitly modeling capture efficiency using Morin and colleagues [-@morin2004] to 'correct' abundances of small size classe, and using a modeling distribution that can account for multi-modality in the body size distribution and still estimate the values of interest. 3) The other considerations ( a) & c) ), which we can address with the hierarchical structure of the model to employ partial pooling across sites. 
+These sampling processes each come with additional considerations 1) first, we need to account for the binned structure ( d) )because this changes the data likelihood and how much information we have about the organism body size distribution. 2) We have inefficient sampling ( e) ), in the lower size classes in particular. This means we don't capture these individuals as frequently as we expect and this influences a specific part of the body size distribution, the lower part. This will also influence different summary statistics (e.g., mean, median, sd), but may have less influence on the upper quantiles depending on how we set up the model. We also have only samples combined across mulitple sampling dates in a year ( b) ). This may lead to multi-modal distributions in the data, rather than a continuous size spectrum. For each of these we had different modeling approaches--explicitly modeling capture efficiency using Morin and colleagues [-@morin2004] to 'correct' abundances of small size classe, and using a modeling distribution that can account for multi-modality in the body size distribution and still estimate the values of interest. 3) The other considerations ( a) & c) ), which we can address with the hierarchical structure of the model to employ partial pooling across sites.
 
 We test different model estimates using simulated data to test differences. We also compare the estimates for the NEON data with each model choice.
 
 <details>
-<summary> Click here for simulation details</summary>
+
+<summary>Click here for simulation details</summary>
 
 ```{r simulate-multisite data, echo=TRUE, eval = FALSE, message = FALSE}
 ## set the simulation parameters
@@ -166,7 +187,7 @@ slimSumm %>%
   knitr::kable(., caption = "Table 2. Negative binomial count model estimates of maximum body size compared to simulation with 1e5. 'site' and 'site_id' represent the site identifiers, 'k_observed' is the number of samples, 'mean_n_observed' is the average individuals in each samples, 'maxL_*' represents the modeled estimates of the maximum body size, and 'maxL_1e5' is the maximum body size observed in 1e5 simulations from truncated normal distribution.")
 ```
 
-We see in the modeled estimates compared to the simulated observation, most estimates are lower because we sampled fewer individuals. One exception is site 'd' which has been 'pulled up' from the partial pooling as we intended, we see a `r (6.13-5.29)/5.29*100`% change from the simulation due to the partial-pooling. 
+We see in the modeled estimates compared to the simulated observation, most estimates are lower because we sampled fewer individuals. One exception is site 'd' which has been 'pulled up' from the partial pooling as we intended, we see a `r (6.13-5.29)/5.29*100`% change from the simulation due to the partial-pooling.
 
 We can check the $L_{max}$ estimates from the EVT models and compare using one site. Let's check this for one site. I will not choose the site that we purposefully did a deviation.
 
@@ -206,9 +227,9 @@ These simulations and model comparisons show that we do a pretty good job of cap
 
 I put together a hierarchical model in stan that uses a negative binomial count model to parameterize the entire body size distribution and then uses posterior predictive simulations to estimate the maximum body size observed using a standardized 'effort'. This model uses partial-pooling across sites to estimate the body size distribution from a truncated normal distribution so we can use information across many sites to inform poorly sampled sites. The model estimates the expected density or counts for each site along with the mean and standard deviation of the truncated normal. The site-level mean and sd of the truncated normal is estimated with hyperpriors for the pooled mean and sd to allow weighting of sites with lots of data versus sites with few data.
 
-From here, we recognize that the upper body size is something we are unlikely to observe and is very likely dependent on the sampling effort in terms of years of sampling. So to estimate this and characterize the uncertainty, for each draw the model performs 20 posterior predictive simulations and estimates the max body size under a standard 'effort'. 
+From here, we recognize that the upper body size is something we are unlikely to observe and is very likely dependent on the sampling effort in terms of years of sampling. So to estimate this and characterize the uncertainty, for each draw the model performs 20 posterior predictive simulations and estimates the max body size under a standard 'effort'.
 
-Below, I test a simulated data set with the negative binomial count model. Further, we know this model is mis-specified for the data because it does not account for the binned data structure, but rather random samples, for each bin based on bin abundance, a uniform distribution bounded by the size class bins edges. There are a number of examples in the NEON data that 
+Below, I test a simulated data set with the negative binomial count model. Further, we know this model is mis-specified for the data because it does not account for the binned data structure, but rather random samples, for each bin based on bin abundance, a uniform distribution bounded by the size class bins edges. There are a number of examples in the NEON data that
 
 ```{r test-hier_nb, warning=FALSE, message=FALSE, eval = TRUE, echo=TRUE}
 
@@ -254,7 +275,7 @@ bind_cols(sim$site_truth[,c(1:2,5:6)], slimSumm) %>%
   knitr::kable(., caption = "Table 2. Negative binomial count model estimates of maximum body size compared to simulation with 1e5. 'site' and 'site_id' represent the site identifiers, 'k_observed' is the number of samples, 'mean_n_observed' is the average individuals in each samples, 'maxL_*' represents the modeled estimates of the maximum body size, and 'maxL_1e5' is the maximum body size observed in 1e5 simulations from truncated normal distribution.")
 ```
 
-We see in the modeled estimates compared to the simulated observation, most estimates are lower because we sampled fewer individuals. One exception is site 'd' which has been 'pulled up' from the partial pooling as we intended, we see a `r (5.19-4.854)/4.854*100`% change from the simulation due to the partial-pooling. 
+We see in the modeled estimates compared to the simulated observation, most estimates are lower because we sampled fewer individuals. One exception is site 'd' which has been 'pulled up' from the partial pooling as we intended, we see a `r (5.19-4.854)/4.854*100`% change from the simulation due to the partial-pooling.
 
 We can check the $L_{max}$ estimates from the EVT models and compare using one site. Let's check this for one site. I will not choose the site that we purposefully did a deviation.
 
@@ -289,9 +310,9 @@ get_max(fit, ci = 0.95) %>%
 
 These simulations and model comparisons show that we do a pretty good job of capturing the signal in this site and it doesn't matter much which model is used for this site that is sampled fairly well. We can't fit a model with `fishmax` to site 'd' because we only have a single sample, but we had no problem with the hierarchical model to get an estimate for this site.
 
-## Prepare NEON data for analysis
+## Prepare NEON data for Negative Binomial analysis
 
-```{r full-NEON-analysis, eval=FALSE, echo=TRUE}
+```{r full-NEON-nb-analysis, eval=FALSE, echo=TRUE}
 # list organized by each taxa group, acceptedTaxonID
 macroTaxaList = readRDS(here('data/derived-data/macroTaxaList.rds'))
 
@@ -377,7 +398,7 @@ taxaNames = names(macroTaxaStanData)
 
 #### Note of caution
 
-Some of the checking of model behavior is outlined in the `model-troubleshooting` file to keep this clean. The majority of this was dealing with divergences when trying to fit a hiearchical model to single-site data (duh!), but a few others need to be checked to ensure good inferences. 
+Some of the checking of model behavior is outlined in the `model-troubleshooting` file to keep this clean. The majority of this was dealing with divergences when trying to fit a hiearchical model to single-site data (duh!), but a few others need to be checked to ensure good inferences.
 
 ### Checking model results
 
@@ -575,11 +596,11 @@ Many models still have divergences.
 
 ## Max estimates are very high in some cases
 
-Initial exploration of the model results suggest that there are some instances when site-level maximums of some species are very unreasonably high. E.g, 20 mm when the largest observed individual across all sites is 11 mm after we sample. 
+Initial exploration of the model results suggest that there are some instances when site-level maximums of some species are very unreasonably high. E.g, 20 mm when the largest observed individual across all sites is 11 mm after we sample.
 
-So I went about reassessing this model to do two things 1) actually account for the binned structure of the data and 2) build in upper bounds on the truncated normal that are flexible, but also do not put probability in mass ranges that are very unlikely and biologically impossible. This does two important things the original model failed to do. First, the artificial jittering created artificial variability when we can simply account for the bin structure. Second, it 
+So I went about reassessing this model to do two things 1) actually account for the binned structure of the data and 2) build in upper bounds on the truncated normal that are flexible, but also do not put probability in mass ranges that are very unlikely and biologically impossible. This does two important things the original model failed to do. First, the artificial jittering created artificial variability when we can simply account for the bin structure. Second, it
 
-Here is an example using a well sampled example. The current maximum estimates for this taxa using the lower-truncated Normal are >20mm. But the maximum observed size across >90k individuals is 11mm.
+Here is an example using a well sampled example. The current maximum estimates for this taxa using the lower-truncated Normal are \>20mm. But the maximum observed size across \>90k individuals is 11mm.
 
 ```{r calibaetis-example}
 
@@ -610,16 +631,556 @@ sim_bin = sim %>%
   dplyr::mutate(sizeClass = round(x),
                 acceptedTaxonID = "sppX") %>% 
   dplyr::count(acceptedTaxonID, event_id, event_within_site, site, site_id, sizeClass) %>% 
-  dplyr::rename(siteID = site_id, collectYear = event_within_site, no_m2 = n ) %>% 
-  make_binned_GEV_stan_data(
-    stan_data = .,
-    chains = 4L,
-    seed = 1312
+  dplyr::rename(no_m2 = n ) %>% 
+  dplyr::mutate(n_per_sample = sum(no_m2), .by = 'event_id') %>% 
+  dplyr::summarise(max_bin = max(sizeClass),
+                   n_per_sample = unique(n_per_sample),
+                   .by = c('acceptedTaxonID', 'event_id', 'event_within_site', 'site', 'site_id')) %>% 
+  dplyr::mutate(taxon_center = median(max_bin),
+                taxon_spread = max(IQR(max_bin),2)) %>% 
+  dplyr::mutate(max_bin_trans = (max_bin - taxon_center)/taxon_spread,
+                bin_lower = (max_bin - 0.5 - taxon_center)/taxon_spread,
+                bin_upper = (max_bin + 0.5 - taxon_center)/taxon_spread)
+
+stan_data <- c()
+stan_data$E = length(unique(sim_bin$event_id))
+stan_data$S = length(unique(sim_bin$site_id))
+stan_data$site_id = sim_bin$site_id
+stan_data$max_bin = sim_bin$max_bin
+stan_data$taxon_center = unique(sim_bin$taxon_center)
+stan_data$taxon_spread = unique(sim_bin$taxon_spread)
+stan_data$bin_lower = sim_bin$bin_lower
+stan_data$bin_upper = sim_bin$bin_upper
+stan_data$n_per_sample = sim_bin$n_per_sample
+stan_data$n_ref = exp(1/stan_data$E * sum(log(stan_data$n_per_sample)))
+stan_data$K_ref = 20L
+stan_data$loc_prior_mean = 0
+stan_data$loc_prior_sd = 1
+stan_data$log_scale_prior_mean = log(0.6)
+stan_data$log_scale_prior_sd = 0.3
+stan_data$shape_prior_mean = 0
+stan_data$shape_prior_sd = 0.1
+stan_data$tau_loc_prior_sd = 0.5
+stan_data$tau_log_scale_prior_sd = 0.1
+stan_data$tau_shape_prior_sd = 0.03
+stan_data$prior_only = 0L
+
+   ## DATA
+   # E = total sampling events
+   # S = total number of sites
+   # site_id = site id column for each sampling event 1:S
+   # max_bin = max bin midpoint for each sampling event
+   # taxon_center; standardized bin median(max_bin)
+   # taxon_spread; standardized bin spread max(IQR(max_bin),2)
+   # bin_lower; lower transformed edge (max_bin - 0.5 - taxon_center) / taxon_spread,
+   # bin_upper; upper transformed edge (max_bin + 0.5 - taxon_center) / taxon_spread
+   # n_per_sample = # of individuals for each sampling event
+   # n_ref = reference #n mean n_per_sample exp(1/E * sum(log(n_e)))
+   # K_ref = standardized number of events i.e. 20
+   # loc_prior_mean global prior for location. Standardize the bin widths and then 0
+   # loc_prior_sd  global prior for scale. Standardize bin widths and then 1
+   # log_scal_prior_mean global scale prior = log(0.6)
+   # log_scale_priod_sd = 0.6
+   # shape_prior_mean = 0, 
+   # shape_prior_sd = 0.1
+   # tau_loc_prior_sd; 0.5
+   # tau_log_scale_prior_sd; 0.35
+   # tau_shape_prior_sd; 0.03  # tight prior to avoid identifiability issues
+
+hier_GEV_mod = cmdstan_model(here('code/stan/hierarchical_GEV_bin.stan'))
+
+fit = hier_GEV_mod$sample(
+  data = stan_data,
+  chains = 4,
+  parallel_chains = 4,
+  init = 0,
+  iter_warmup = 1500,
+  iter_sampling = 1000,
+  seed = 1312,
+  adapt_delta = 0.99,
+  max_treedepth = 12
+)
+
+summ = fit$summary()
+
+stan_data$prior_only = 1L
+fit_prior = hier_GEV_mod$sample(
+  data = stan_data,
+  chains = 4,
+  parallel_chains = 4,
+  iter_warmup = 1500,
+  iter_sampling = 1000,
+  seed = 1312,
+  adapt_delta = 0.95,
+  max_treedepth = 10
+)
+
+
+## create later for NEON data
+make_binned_GEV_stan_data = function(
+    bin_data = NULL,
+    event_data = NULL,
+    site_col = "siteID",
+    event_cols = "collectYear",
+    taxon_col = "acceptedTaxonID",
+    size_class_col = "sizeClass",
+    count_col = "no_m2",
+    prior_only = 0L
+){
+  
+  required_bin_columns <- unique(
+    c(
+      site_col,
+      event_cols,
+      taxon_col,
+      size_class_col,
+      count_col
+    )
+  )
+  
+   missing_columns <- setdiff(
+    required_bin_columns,
+    names(bin_data)
+  )
+  
+  if (length(missing_columns)) {
+    stop(
+      "bin_data is missing required columns: ",
+      paste(missing_columns, collapse = ", ")
+    )
+  }
+   
+  if(is.null(event_data)){
+    event_data = bin_data %>% 
+     summarise(max_bin = slice_max(sizeClass),
+               .by = c('acceptedTaxonID','event_id','collectYear')) 
+  }
+  
+  
+taxon_summary <- event_data %>% 
+  summarise(
+    c_t = median(max_bin),
+    d_t = max(IQR(max_bin), 2)
   )
 
-
-make_binned_GEV_stan_data = function()
+event_data <- event_data %>% 
+  mutate(
+    bin_lower_std = (max_bin - 0.5 - c_t) / d_t,
+    bin_upper_std = (max_bin + 0.5 - c_t) / d_t
+  )
+   
+   ## DATA
+   # E = total sampling events
+   # S = total number of sites
+   # site_ID = site id column for each sampling event 1:S
+   # max_bin = max bin midpoint for each sampling event
+   # taxon_center; standardized bin median(max_bin)
+   # taxon_spread; standardized bin spread max(IQR(max_bin),2)
+   # bin_lower; lower transformed edge (max_bin - 0.5 - taxon_center) / taxon_spread,
+   # bin_upper; upper transformed edge (max_bin + 0.5 - taxon_center) / taxon_spread
+   # n_per_sample = # of individuals for each sampling event
+   # n_ref = reference #n mean n_per_sample exp(1/E * sum(log(n_e)))
+   # K_ref = standardized number of events i.e. 20
+   # loc_prior_mean global prior for location. Standardize the bin widths and then 0
+   # loc_prior_sd  global prior for scale. Standardize bin widths and then 1
+   # log_scal_prior_mean global scale prior = log(0.6)
+   # log_scale_priod_sd = 0.6
+   # shape_prior_mean = 0, 
+   # shape_prior_sd = 0.1
+   # tau_loc_prior_sd; 0.5
+   # tau_log_scale_prior_sd; 0.35
+   # tau_shape_prior_sd; 0.03  # tight prior to avoid identifiability issues
+  
+}
 ```
 
-### EVT-Gumbel
+### Model divergence troubleshooting
 
+
+```{r diagnostics-bad-models}
+
+# fit = readRDS(x)
+
+diagnostics <- fit$diagnostic_summary(
+  diagnostics = c(
+    "divergences",
+    "treedepth",
+    "ebfmi"
+  ),
+  quiet = TRUE
+)
+
+diagnostics
+# a single chain is the main issue here
+sampler_diag <- fit$sampler_diagnostics(
+  format = "df"
+)
+
+divergence_rate <- mean(
+  sampler_diag$divergent__
+)#17% of transitions had divergences
+
+parameter_names <- posterior::variables(
+  fit$draws()
+)
+
+key_parameters <- grep(
+  paste0(
+    "^(",
+    paste(
+      c(
+  "alpha_shape",
+      "tau_shape",
+      "z_shape[1]",
+      "z_shape[2]",
+      "z_shape[3]",
+      "z_shape[4]",
+      "z_shape[5]",
+      "alpha_loc",
+      "alpha_log_scale",
+      "tau_loc",
+      "tau_log_scale"
+      ),
+      collapse = "|"
+    ),
+    ")"
+  ),
+  parameter_names,
+  value = TRUE
+)
+
+key_parameters
+
+get_divergence_draws <- function(
+    fit,
+    variables
+) {
+  draws <- as.data.frame(
+    fit$draws(
+      variables = variables,
+      format = "df"
+    )
+  )
+
+  diagnostics <- as.data.frame(
+    fit$sampler_diagnostics(
+      format = "df"
+    )
+  )
+
+  draw_key <- paste(
+    draws$.chain,
+    draws$.iteration,
+    sep = ":"
+  )
+
+  diagnostic_key <- paste(
+    diagnostics$.chain,
+    diagnostics$.iteration,
+    sep = ":"
+  )
+
+  diagnostic_row <- match(
+    draw_key,
+    diagnostic_key
+  )
+
+  if (anyNA(diagnostic_row)) {
+    stop(
+      "Could not match all posterior draws ",
+      "to sampler diagnostics."
+    )
+  }
+
+  draws$divergent__ <-
+    diagnostics$divergent__[diagnostic_row]
+
+  draws$energy__ <-
+    diagnostics$energy__[diagnostic_row]
+
+  draws$accept_stat__ <-
+    diagnostics$accept_stat__[diagnostic_row]
+
+  draws$treedepth__ <-
+    diagnostics$treedepth__[diagnostic_row]
+
+  draws
+}
+
+divergence_draws <- get_divergence_draws(
+  fit,
+  key_parameters
+)
+
+divergent_draws_df <- divergence_draws[
+  divergence_draws$divergent__ == 1,
+]
+
+nondivergent_draws_df <- divergence_draws[
+  divergence_draws$divergent__ == 0,
+]
+
+screen_divergent_parameters <- function(
+    fit,
+    variables
+) {
+  dat <- get_divergence_draws(
+    fit = fit,
+    variables = variables
+  )
+
+  is_divergent <- dat$divergent__ == 1
+
+  if (!any(is_divergent)) {
+    return(
+      data.frame(
+        variable = variables,
+        n_divergent = 0L,
+        ks_distance = NA_real_,
+        median_shift_mad = NA_real_,
+        divergent_rank_median = NA_real_,
+        divergent_rank_iqr = NA_real_
+      )
+    )
+  }
+
+  results <- lapply(
+    variables,
+    function(variable) {
+      x <- dat[[variable]]
+
+      keep <- is.finite(x)
+
+      x <- x[keep]
+      div <- is_divergent[keep]
+
+      x_div <- x[div]
+      x_ok <- x[!div]
+
+      if (
+        length(x_div) < 2L ||
+        length(x_ok) < 2L
+      ) {
+        return(
+          data.frame(
+            variable = variable,
+            n_divergent = length(x_div),
+            ks_distance = NA_real_,
+            median_shift_mad = NA_real_,
+            divergent_rank_median = NA_real_,
+            divergent_rank_iqr = NA_real_
+          )
+        )
+      }
+
+      parameter_scale <- stats::mad(
+        x,
+        constant = 1.4826
+      )
+
+      if (
+        !is.finite(parameter_scale) ||
+        parameter_scale <= 0
+      ) {
+        parameter_scale <- stats::sd(x)
+      }
+
+      if (
+        !is.finite(parameter_scale) ||
+        parameter_scale <= 0
+      ) {
+        parameter_scale <- 1
+      }
+
+      ks_result <- suppressWarnings(
+        stats::ks.test(
+          x_div,
+          x_ok,
+          exact = FALSE
+        )
+      )
+
+      scaled_ranks <-
+        rank(
+          x,
+          ties.method = "average"
+        ) / (length(x) + 1)
+
+      div_ranks <- scaled_ranks[div]
+
+      data.frame(
+        variable = variable,
+        n_divergent = length(x_div),
+
+        median_divergent =
+          stats::median(x_div),
+
+        median_nondivergent =
+          stats::median(x_ok),
+
+        ks_distance =
+          unname(ks_result$statistic),
+
+        median_shift_mad =
+          abs(
+            stats::median(x_div) -
+              stats::median(x_ok)
+          ) / parameter_scale,
+
+        divergent_rank_median =
+          stats::median(div_ranks),
+
+        divergent_rank_iqr =
+          stats::IQR(div_ranks)
+      )
+    }
+  )
+
+  results <- do.call(
+    rbind,
+    results
+  )
+
+  results[
+    order(
+      results$ks_distance,
+      decreasing = TRUE,
+      na.last = TRUE
+    ),
+  ]
+}
+
+divergence_screen <- screen_divergent_parameters(
+  fit,
+  key_parameters
+)
+
+head(
+  divergence_screen,
+  20
+)
+
+make_bayesplot_nuts <- function(fit) {
+  diagnostics <- as.data.frame(
+    fit$sampler_diagnostics(
+      format = "df"
+    )
+  )
+
+  diagnostic_variables <- setdiff(
+    names(diagnostics),
+    c(
+      ".chain",
+      ".iteration",
+      ".draw"
+    )
+  )
+
+  long_list <- lapply(
+    diagnostic_variables,
+    function(variable) {
+      data.frame(
+        Chain = diagnostics$.chain,
+        Iteration = diagnostics$.iteration,
+        Parameter = variable,
+        Value = diagnostics[[variable]]
+      )
+    }
+  )
+
+  do.call(
+    rbind,
+    long_list
+  )
+}
+
+nuts_parameters <- make_bayesplot_nuts(
+  fit
+)
+
+top_parameters <- head(
+  divergence_screen$variable,
+  6
+)
+
+top_draws <- fit$draws(
+  variables = top_parameters,
+  format = "array"
+)
+
+bayesplot::mcmc_pairs(
+  top_draws,
+  pars = top_parameters,
+  np = nuts_parameters,
+  # condition = bayesplot::pairs_condition(
+    # nuts = "divergent__"
+  # ),
+  off_diag_args = list(
+    alpha = 0.35,
+    size = 0.6
+  ),
+  grid_args = list(
+    top = "Divergent versus nondivergent draws"
+  )
+)
+
+bayesplot::mcmc_pairs(
+  fit$draws(variables = c('tau_log_mu','tau_log_sigma'),
+            format = 'array'),
+  pars = c('tau_log_mu','tau_log_sigma'),
+  np = nuts_parameters,
+  off_diag_args = list(
+    alpha = 0.35,
+    size = 0.6
+  ),
+  grid_args = list(
+    top = "Divergent versus nondivergent draws"
+  )
+)
+
+bayesplot::mcmc_parcoord(
+  top_draws,
+  pars = top_parameters,
+  transformations = function(x) {
+    scale_value <- stats::mad(
+      x,
+      constant = 1.4826
+    )
+
+    if (
+      !is.finite(scale_value) ||
+      scale_value <= 0
+    ) {
+      scale_value <- stats::sd(x)
+    }
+
+    if (
+      !is.finite(scale_value) ||
+      scale_value <= 0
+    ) {
+      return(x - stats::median(x))
+    }
+
+    (
+      x - stats::median(x)
+    ) / scale_value
+  },
+  np = nuts_parameters
+)
+
+bayesplot::mcmc_trace(
+  top_draws,
+  pars = top_parameters,
+  np = nuts_parameters
+)
+
+stan_data = macroTaxaStanData[["DRUCOR"]]
+stan_data$mu_upper
+init_lists = readRDS(here('ignore/nb_init_lists.rds'))
+DRUCOR_initList = init_lists[["DRUCOR"]]
+
+```
+
+## Prepare NEON data for EVT analysis
+
+### EVT-Gumbel
