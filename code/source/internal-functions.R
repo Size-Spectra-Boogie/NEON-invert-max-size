@@ -198,6 +198,9 @@ simulation = function(simPars, seed = 1312){
   )
 }
 
+
+###### Make Stan Data functions #########
+
 # Retention-corrected latent-grid data preparation
 #
 # This script converts one taxon's site x event x 1-mm size-class data
@@ -1190,7 +1193,127 @@ make_retention_grid_stan_data <- function(
   )
 }
 
+#'
+#'
+#'
 
+make_binned_GEV_stanData = function(
+    bin_data = NULL,
+    event_data = NULL,
+    site_col = "siteID",
+    event_cols = "collectYear",
+    taxon_col = "acceptedTaxonID",
+    size_class_col = "sizeClass",
+    count_col = "no_m2",
+    K_ref = 20L,
+    loc_prior_mean = 0,
+    loc_prior_sd = 1,
+    log_scale_prior_mean = log(0.6),
+    log_scale_prior_sd = 0.3,
+    shape_prior_mean = 0,
+    shape_prior_sd = 0.1,
+    tau_loc_prior_sd = 0.5,
+    tau_log_scale_prior_sd = 0.1,
+    tau_shape_prior_sd = 0.03,
+    prior_only = 0L
+){
+  ## DATA
+  # E = total sampling events
+  # S = total number of sites
+  # site_ID = site id column for each sampling event 1:S
+  # max_bin = max bin midpoint for each sampling event
+  # taxon_center; standardized bin median(max_bin)
+  # taxon_spread; standardized bin spread max(IQR(max_bin),2)
+  # bin_lower; lower transformed edge (max_bin - 0.5 - taxon_center) / taxon_spread,
+  # bin_upper; upper transformed edge (max_bin + 0.5 - taxon_center) / taxon_spread
+  # n_per_sample = # of individuals for each sampling event
+  # n_ref = reference #n mean n_per_sample exp(1/E * sum(log(n_e)))
+  # K_ref = standardized number of events i.e. 20
+  # loc_prior_mean global prior for location. Standardize the bin widths and then 0
+  # loc_prior_sd  global prior for scale. Standardize bin widths and then 1
+  # log_scal_prior_mean global scale prior = log(0.6)
+  # log_scale_priod_sd = 0.6
+  # shape_prior_mean = 0, 
+  # shape_prior_sd = 0.1
+  # tau_loc_prior_sd; 0.5
+  # tau_log_scale_prior_sd; 0.35
+  # tau_shape_prior_sd; 0.03  # tight prior to avoid identifiability issues
+  
+  required_bin_columns <- unique(
+    c(
+      site_col,
+      event_cols,
+      taxon_col,
+      size_class_col,
+      count_col
+    )
+  )
+  
+  missing_columns <- setdiff(
+    required_bin_columns,
+    names(bin_data)
+  )
+  
+  if (length(missing_columns)) {
+    stop(
+      "bin_data is missing required columns: ",
+      paste(missing_columns, collapse = ", ")
+    )
+  }
+  
+  # if(is.null(event_data)){
+  #   event_data = bin_data %>% 
+  #     summarise(max_bin = slice_max(sizeClass),
+  #               .by = c('acceptedTaxonID','collectYear')) 
+  # }
+  
+  # create the site_mapping
+  site_mapping = x %>% 
+    dplyr::distinct(siteID, collectYear) %>% 
+    dplyr::select(siteName = siteID) %>% 
+    dplyr::mutate(site_id = as.integer(as.factor(siteName)))
+  # create the stan_data
+  stan_data = c()
+  stan_data$E = x %>% 
+    dplyr::distinct(siteID, collectYear) %>% 
+    nrow()
+  stan_data$S = x %>% 
+    dplyr::distinct(siteID) %>% 
+    nrow()
+  stan_data$site_id = unlist(site_mapping$site_id)
+  stan_data$max_bin = x %>% 
+    dplyr::summarise(max_bin = max(sizeClass), .by = c(siteID, collectYear)) %>% 
+    select(max_bin) %>% 
+    unlist %>% unname
+  stan_data$taxon_center = unlist(median(stan_data$max_bin))
+  stan_data$taxon_spread = unlist(max(IQR(stan_data$max_bin),2))
+  stan_data$bin_lower = (stan_data$max_bin - 0.5 - stan_data$taxon_center) / stan_data$taxon_spread
+  stan_data$bin_upper = (stan_data$max_bin + 0.5 - stan_data$taxon_center) / stan_data$taxon_spread
+  stan_data$n_per_sample = x %>% 
+    dplyr::summarise(n_per_sample = sum(no_m2), .by = c(siteID, collectYear)) %>% 
+    dplyr::select(n_per_sample) %>% 
+    unlist %>% unname
+  stan_data$n_ref = exp(1/stan_data$E * sum(log(stan_data$n_per_sample)))
+  stan_data$K_ref = K_ref
+  stan_data$loc_prior_mean = loc_prior_mean
+  stan_data$loc_prior_sd = loc_prior_sd
+  stan_data$log_scale_prior_mean = log_scale_prior_mean
+  stan_data$log_scale_prior_sd = log_scale_prior_sd 
+  stan_data$shape_prior_mean = shape_prior_mean
+  stan_data$shape_prior_sd = shape_prior_sd
+  stan_data$tau_loc_prior_sd = tau_loc_prior_sd
+  stan_data$tau_log_scale_prior_sd = tau_log_scale_prior_sd
+  stan_data$tau_shape_prior_sd = tau_shape_prior_sd
+  stan_data$prior_only = prior_only
+  
+  return(list(
+    stan_data = stan_data,
+    mapping = site_mapping
+  ))
+}
+
+
+##### Make initialization functions #####
 # Initialization for retention-corrected latent-grid model
 # --------------------------------------------------------
 #
@@ -2040,6 +2163,8 @@ make_retention_grid_init <- function(
   )
 }
 
+
+###### Make named fit functions ###########
 #'
 #'
 #'
@@ -2084,6 +2209,49 @@ fit_ln_named = function(stan_data = NULL, taxaName = NULL, rerun = FALSE, overwr
     return(NULL)
   }
 }
+
+fit_GEV_name = function(stan_data = NULL, taxaName = NULL, rerun = FALSE, overwrite = FALSE){
+  filePath = paste0(here("ignore/models"),"/",taxaName,"_EVTbin.rds")
+  print(taxaName)
+  if(any(rerun, !file.exists(filePath))){
+    if(all(file.exists(filePath),!overwrite)){
+      warning('Model file already exists and `overwrite` = FALSE. Set to TRUE to overwrite existing files.')
+      return(NULL)
+    }
+    chains = 4L
+    # this model accounts for a single site internally
+    ## set initialization values.
+    init_list = make_retention_grid_init(
+      stan_data = stan_data,
+      chains = chains,
+      seed = 1312
+    )
+    
+    fit = hier_GEV_mod$sample(
+      data = stan_data,
+      seed = 1312,
+      chains = chains,
+      parallel_chains = chains,
+      
+      init = init_list,
+      
+      iter_warmup = 1500,
+      iter_sampling = 1000,
+      adapt_delta = 0.99,
+      max_treedepth = 12,
+      refresh = 0
+    )
+    fit$save_object(file = filePath)
+    print(paste0('File saved as: ignore/models/',taxaName,'_lnbin.rds'))
+    return(NULL)
+  } else{
+    print(paste("Model ",taxaName," exists. To overwrite, set `rerun` = TRUE and `overwrite` = TRUE"))
+    return(NULL)
+  }
+}
+
+
+
 #'
 #'
 check_divergences = function(filePath = NULL){

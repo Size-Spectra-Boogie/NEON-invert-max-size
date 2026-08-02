@@ -14,9 +14,11 @@ library(purrr)
 library(furrr)
 library(junkR)
 library(cmdstanr)
+library(bayesplot)
 library(fishmax)
 library(viridis)
 library(stringr)
+
 theme_set(theme_minimal())
 
 rerun_data = FALSE

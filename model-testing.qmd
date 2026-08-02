@@ -30,10 +30,11 @@ knitr::knit_hooks$set(fig_collapse=function(before, options, envir) {
 })
 
 source(here::here('code/00_init.R'))
+future::plan('multisession', workers=10)
 
 ```
 
-# Introduciton
+# Introduction
 
 The most appropriate approach would be to allow us to use the information across many sites when we have many observations. To do so, a hierarchical approach is necessary. Also, there is a fundamental difference between the estimand in the Extreme Value Theory (EVT) models used below and the data we have available. The EVT models are using just the maximum values observed across the sampling years to estimate the largest size -- so we are only using something like 3-15 data points. Alternatively, we can try to use all the size information to estimate the maximum body size.
 
@@ -702,6 +703,7 @@ fit = hier_GEV_mod$sample(
 )
 
 summ = fit$summary()
+fit_draws = fit$draws(format = 'df')
 
 stan_data$prior_only = 1L
 fit_prior = hier_GEV_mod$sample(
@@ -715,87 +717,67 @@ fit_prior = hier_GEV_mod$sample(
   max_treedepth = 10
 )
 
-
-## create later for NEON data
-make_binned_GEV_stan_data = function(
-    bin_data = NULL,
-    event_data = NULL,
-    site_col = "siteID",
-    event_cols = "collectYear",
-    taxon_col = "acceptedTaxonID",
-    size_class_col = "sizeClass",
-    count_col = "no_m2",
-    prior_only = 0L
-){
-  
-  required_bin_columns <- unique(
-    c(
-      site_col,
-      event_cols,
-      taxon_col,
-      size_class_col,
-      count_col
-    )
-  )
-  
-   missing_columns <- setdiff(
-    required_bin_columns,
-    names(bin_data)
-  )
-  
-  if (length(missing_columns)) {
-    stop(
-      "bin_data is missing required columns: ",
-      paste(missing_columns, collapse = ", ")
-    )
-  }
-   
-  if(is.null(event_data)){
-    event_data = bin_data %>% 
-     summarise(max_bin = slice_max(sizeClass),
-               .by = c('acceptedTaxonID','event_id','collectYear')) 
-  }
-  
-  
-taxon_summary <- event_data %>% 
-  summarise(
-    c_t = median(max_bin),
-    d_t = max(IQR(max_bin), 2)
-  )
-
-event_data <- event_data %>% 
-  mutate(
-    bin_lower_std = (max_bin - 0.5 - c_t) / d_t,
-    bin_upper_std = (max_bin + 0.5 - c_t) / d_t
-  )
-   
-   ## DATA
-   # E = total sampling events
-   # S = total number of sites
-   # site_ID = site id column for each sampling event 1:S
-   # max_bin = max bin midpoint for each sampling event
-   # taxon_center; standardized bin median(max_bin)
-   # taxon_spread; standardized bin spread max(IQR(max_bin),2)
-   # bin_lower; lower transformed edge (max_bin - 0.5 - taxon_center) / taxon_spread,
-   # bin_upper; upper transformed edge (max_bin + 0.5 - taxon_center) / taxon_spread
-   # n_per_sample = # of individuals for each sampling event
-   # n_ref = reference #n mean n_per_sample exp(1/E * sum(log(n_e)))
-   # K_ref = standardized number of events i.e. 20
-   # loc_prior_mean global prior for location. Standardize the bin widths and then 0
-   # loc_prior_sd  global prior for scale. Standardize bin widths and then 1
-   # log_scal_prior_mean global scale prior = log(0.6)
-   # log_scale_priod_sd = 0.6
-   # shape_prior_mean = 0, 
-   # shape_prior_sd = 0.1
-   # tau_loc_prior_sd; 0.5
-   # tau_log_scale_prior_sd; 0.35
-   # tau_shape_prior_sd; 0.03  # tight prior to avoid identifiability issues
-  
-}
+prior_draws = fit_prior$draws(format = 'df')
 ```
 
-### Model divergence troubleshooting
+### Prior Predictive checks
 
+```{r site4-prior-checks}
+# prior distribution check on one of the sites
+fit_x = data.frame(fit = fit_draws$`site_ref_q50_mm[4]`)
+prior_x = data.frame(prior = prior_draws$`site_ref_q50_mm[4]`)
+
+ggplot()+
+  geom_density(data = fit_x, aes(x = fit), fill = 'grey', alpha = 0.5)+
+  geom_density(data = prior_x, aes(x = prior), alpha = 0.5, fill = 'red')+
+  legend
+```
+
+## Prepare NEON data for EVT analysis
+
+```{r NEON-stan-data}
+# list organized by each taxa group, acceptedTaxonID
+macroTaxaList = readRDS(here('data/derived-data/macroTaxaList.rds'))
+
+# convert the taxa sample lists in the correct format for the EVT model
+macroTaxaList %>% 
+  future_map(~make_binned_GEV_stanData(.x),
+             .options = furrr_options(seed= 1312)
+      ) %>% 
+  # this is suprisingly a large file. saved to ignore/ folder.
+saveRDS(here('ignore/macroTaxaStanDataGEVFull.rds'))
+
+hier_GEV_mod = cmdstan_model(here('code/stan/hierarchical_GEV_bin.stan'))
+
+x = macroTaxaList[[9]]
+# debugonce(make_binned_GEV_stanData)
+stan_data = make_binned_GEV_stanData(
+  bin_data = x,
+  event_data = NULL
+)$stan_data
+
+fit = hier_GEV_mod$sample(
+  data = stan_data,
+  chains = 4,
+  parallel_chains = 4,
+  # init = 0,
+  iter_warmup = 1500,
+  iter_sampling = 1000,
+  seed = 1312,
+  adapt_delta = 0.99,
+  max_treedepth = 12,
+  refresh = 0
+)
+   
+fit$summary() %>% View()
+  
+
+```
+
+
+
+
+### Model divergence troubleshooting
 
 ```{r diagnostics-bad-models}
 
@@ -1181,6 +1163,5 @@ DRUCOR_initList = init_lists[["DRUCOR"]]
 
 ```
 
-## Prepare NEON data for EVT analysis
 
 ### EVT-Gumbel
